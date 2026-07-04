@@ -48,7 +48,7 @@ class DetectorConfig(BaseModel):
         num_threads: ONNX 推理线程数。
     """
 
-    model_path: str = "model/isbndetect_yolo.onnx"
+    model_path: str = "model/best.onnx"
     conf_threshold: float = 0.3
     fallback_ratio: float = 0.6
     padding: int = 20

@@ -12,7 +12,7 @@
 | 维度 | cipx | isbnx |
 |------|------|-------|
 | **版本** | 0.1.0 | 0.1.0 |
-| **CIP 检测** | ONNX YOLO (`model/isbndetect_yolo.onnx`) | ONNX YOLO (`model/best.onnx`) |
+| **CIP 检测** | ONNX YOLO (`model/best.onnx`) | ONNX YOLO (`model/best.onnx`) |
 | **OCR 引擎** | RapidOCR | RapidOCR + pyzbar（条码） |
 | **ISBN 校验** | `mneia-isbn` | `mneia-isbn` |
 | **PDF 处理** | pdf-inspector + pymupdf | pdf-inspector + pymupdf |

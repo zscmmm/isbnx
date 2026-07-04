@@ -212,7 +212,7 @@ isbnx/
 │       ├── archive.py         # 压缩包（PDG）ISBN 提取
 │       ├── pdf_type.py        # PDF 类型检测（文本/扫描）
 │       ├── model/             # ONNX 模型文件
-│       │   └── isbndetect_yolo.onnx
+│       │   └── best.onnx
 │       ├── ocr/               # OCR 引擎
 │       │   ├── isbnx_pyzbar.py    # 条形码解码
 │       │   └── isbnx_rapiocr.py   # RapidOCR 文字识别
