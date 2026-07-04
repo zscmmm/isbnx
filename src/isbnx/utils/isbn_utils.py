@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from mneia_isbn import ISBN as _ISBN
 
@@ -12,6 +13,12 @@ from mneia_isbn import ISBN as _ISBN
 # 1. 优先找 "ISBN" 标记后的内容（含常见 OCR 误识 1SBN/IS8N）
 # 2. 无标记时回退到 978/979 开头的长数字序列
 # 3. 最终兜底：全文清洗后直接校验
+
+# 数字之间的 CJK 字符（PDF CID 字体 ToUnicode CMap 错误导致的乱码）替换为分隔符
+# 例如：ISBN 978唱7唱03唱027084唱9 → ISBN 978-7-03-027084-9
+# 限制最多 3 个 CJK 字符（乱码通常为单字，避免误伤正常中文长句）
+# 注意：必须放在 NFKC 规范化之后、ISBN 正则匹配之前
+_CJK_BETWEEN_DIGITS = re.compile(r"(?<=\d)\s*[\u4e00-\u9fff]{0,3}\s*(?=\d)")
 
 _ISBN_MARKER = re.compile(
     r"(?:[1Il]\s*[S5]\s*[8B]\s*N\s*[:：]?\s*)?"
@@ -26,6 +33,13 @@ _ISBN_FALLBACK = re.compile(
 
 
 # ── 清洗与校验 ────────────────────────────────────────
+
+
+def _normalize_text(text: str) -> str:
+    """文本规范化：全角→半角 + PDF CID 字体乱码修复。"""
+    text = unicodedata.normalize("NFKC", text)
+    text = _CJK_BETWEEN_DIGITS.sub("-", text)
+    return text
 
 
 def _clean_isbn(raw: str) -> str:
@@ -88,7 +102,10 @@ def extract_isbn(text: str) -> str | None:
         >>> extract_isbn("2024年出版 978-7-89446-541-2")
         '9787894465412'
     """
-    # 0. 条形码 OCR 纠错：竖线被误读为 1（1787→9787）
+    # 0. 文本规范化：全角→半角 + PDF 编码乱码修复
+    text = _normalize_text(text)
+
+    # 0a. 条形码 OCR 纠错：竖线被误读为 1（1787→9787）
     text = re.sub(r"(?<!\d)1787(\d)", r"9787\1", text)
 
     # 1. 优先找 "ISBN" 标记后的内容

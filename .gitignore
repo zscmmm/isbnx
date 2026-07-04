@@ -22,3 +22,7 @@ test_a.py
 test_*.py
 !tests/test_mobis.py
 .pypirc
+*.pdf
+debug_font.py
+debug_font2.py
+debug_raw.py

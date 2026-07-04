@@ -156,11 +156,39 @@ def _extract_text_from_page(doc: fitz.Document, page_num: int) -> list[str]:
         return []
 
 
-def _render_page_to_image(doc: fitz.Document, page_num: int, zoom: float = 2.0):
-    """将 PDF 单页渲染为 PIL Image。"""
+def _render_page_to_image(
+    doc: fitz.Document,
+    page_num: int,
+    zoom: float = 2.0,
+    *,
+    min_short_side: int = 600,
+    max_short_side: int = 2000,
+) -> Image.Image:
+    """将 PDF 单页渲染为 PIL Image。
 
+    根据页面物理尺寸自动调整 zoom 倍数，确保渲染结果既不过小也不过大的。
+
+    * 页面物理尺寸**太小**（如 41x60 pt 的超小扫描件）：自动提高 zoom，
+      使短边至少 ``min_short_side`` 像素，避免 ONNX 输入过小无法检测。
+    * 页面物理尺寸**太大**（如大幅面扫描件）：自动降低 zoom，
+      使短边不超过 ``max_short_side`` 像素，避免渲染超大图像浪费资源。
+
+    Args:
+        doc: PyMuPDF Document。
+        page_num: 页码（1-indexed）。
+        zoom: 基础缩放倍数（默认 2.0），在页面尺寸适中时使用。
+        min_short_side: 渲染后图像短边的最小像素数（默认 600）。
+        max_short_side: 渲染后图像短边的最大像素数（默认 2000）。
+    """
     page = doc[page_num - 1]
-    mat = fitz.Matrix(zoom, zoom)
+    rect = page.rect
+    short_side = min(rect.width, rect.height)
+    # 如果页面物理尺寸太小，自动提高 zoom 以达到最小短边
+    min_zoom = min_short_side / short_side if short_side > 0 else zoom
+    # 如果页面物理尺寸太大，自动降低 zoom 以免超过最大短边
+    max_zoom = max_short_side / short_side if short_side > 0 else zoom
+    final_zoom = max(min_zoom, min(max_zoom, zoom))
+    mat = fitz.Matrix(final_zoom, final_zoom)
     pix = page.get_pixmap(matrix=mat)
     return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
 
