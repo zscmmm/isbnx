@@ -1,0 +1,151 @@
+#[Info]
+site_name: isbnx 
+site_description: 从PDF/图片/压缩包/epub文件中提取CIP信息
+site_author: zscmmm
+
+nav:
+  - 首页: index.md
+  - 提取流程:
+    - flow/image_flow.md
+    - flow/pdf_flow.md
+    - flow/epub_flow.md
+    - flow/archive_flow.md
+  - 测试报告: isbnx_vs_cipx_report.md
+  - API 参考:
+    - api/isbnx.md
+    - api/detector.md
+    - api/config.md
+    - api/models.md
+    - api/ocr.md
+    - api/utils.md
+
+
+
+edit_uri: edit/main/docs # 编辑按钮跳转的链接
+repo_url: https://github.com/zscmmm/isbnx # 右上角点击跳转的链接
+repo_name: isbnx # 右上角的名字
+copyright: Copyright &copy 2025 by zscmmm; # 左下角的版权声明
+extra:
+  social:
+    - icon: fontawesome/brands/github     
+      link: https://github.com/zscmmm
+      name: GitHub ##网页右下角的图标链接
+theme:
+  name: material
+  language: zh 
+  icon:
+    repo: fontawesome/brands/github #右上角图标
+    logo: fontawesome/brands/cuttlefish #左上角图标
+  favicon: images/cuttlefish.svg 
+  palette:
+  - media: "(prefers-color-scheme)"
+    toggle:
+      icon: material/brightness-auto
+      name: Switch to light mode
+  - media: "(prefers-color-scheme: light)"
+    scheme: default
+    primary: teal
+    accent: purple
+    toggle:
+      icon: material/weather-sunny
+      name: Switch to dark mode
+  - media: "(prefers-color-scheme: dark)"
+    scheme: slate
+    primary: black
+    accent: lime
+    toggle:
+      icon: material/weather-night
+      name: Switch to system preference
+  features:
+    - announce.dismiss #呈现可标记为由用户读取的临时公告,可以包含一个用于取消当前公告的按钮
+    - navigation.instant # 现在页面不会跳转,而是类似单页应用,搜索和各种跳转都是在当前页面完成,对美观有很大帮助
+    - header.autohide  #自动隐藏顶部标题(在观看文章的时候会自动隐藏,滑动鼠标的时候会自动显示)
+    - navigation.tracking #地址栏中的 URL 将自动更新为在目录中突出显示的活动锚点
+    - navigation.tabs #顶级部分将呈现在上面视口标题下方的菜单层中,但在移动设备上保持原样
+    - navigation.tabs.sticky  #启用粘性选项卡后,导航选项卡将锁定在标题下方,并在向下滚动时始终保持可见
+    - navigation.sections #启用部分后,顶级部分在边栏中呈现为1220px以上视口的组,但在移动设备上保持原样
+    - navigation.top # 返回顶部的按钮 在上滑时出现
+    - navigation.footer #页脚将呈现在边栏中,但在移动设备上保持原样.,# 页脚提示下一章
+    - search.suggest # 搜索输入一些字母时推荐补全整个单词
+    - search.highlight # 搜索出的文章关键词加入高亮
+    - search.share #搜索分享按钮
+    - navigation.expand # 打开Tab时左侧目录全部展开
+    - navigation.indexes #启用节索引页后,可以将文档直接附加到节
+    - content.tabs.link
+    - content.tooltips
+    - content.code.copy #代码复制
+    - content.action.edit
+    - content.action.view
+    - content.code.annotate 
+
+plugins:
+  - search #搜索配置
+  - autorefs #自动引用
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: ["src"] # 需要解析的路径
+          options:
+            members_order: source
+            heading_level: 3  # 解析的函数的标题级别
+            show_root_full_path: true  #显示根对象标题的完整 Python 路径,默认为true
+            # show_root_members_full_path: true  #显示根成员的完整 Python 路径。 默认为false
+            # show_object_full_path: true  #递归显示每个成员的完整路径, （默认为false）
+            parameter_headings: false #显示参数标题（默认为false）
+            show_root_toc_entry: true  #显示根对象的目录项(默认为true)
+            # summary: true
+            show_symbol_type_heading: true  #显示符号类型标题（默认为false,建议开启）
+            show_symbol_type_toc: true  #显示符号类型目录项（默认为false,建议开启）
+            show_labels: true   #显示标签（默认为true）
+            docstring_style: google #google风格的文档字符串
+            show_signature: true  #显示方法和函数签名。
+            separate_signature: true #是否将整个签名放在标题下方的代码块中。 
+            show_signature_annotations: true   #在方法和函数签名中显示类型注释。
+            # signature_crossrefs: true
+            show_source: true #显示源代码链接(默认为true)
+
+##### 看官网： https://squidfunk.github.io/mkdocs-material/setup/extensions/ #####
+extra_javascript:
+  - javascripts/mathjax.js
+  - javascripts/mermaid.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+  - https://unpkg.com/mermaid@11/dist/mermaid.min.js
+
+markdown_extensions:
+  # Python Markdown
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - toc:
+      permalink: true  # 固定标题位置为当前位置
+  # Python Markdown Extensions,需要额外加载本地js文件
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.betterem:
+      smart_enable: all
+  - pymdownx.caret
+  - pymdownx.critic:
+      mode: view  #显示文档中添加、删除或更新的部分
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      linenums: true # 显示行号
+      # auto_title: true # 显示编程语言名称
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true  #切换复选框的渲染样式
+  - pymdownx.tilde  
+

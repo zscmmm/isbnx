@@ -1,0 +1,52 @@
+[project]
+name = "isbnx"
+version = "0.0.1"
+description = "从 PDF、图片、压缩包和 EPUB 文件中提取 ISBN 号，支持 ONNX 检测和 OCR 识别"
+readme = "README.md"
+authors = [
+    { name = "zscmmm", email = "111739721+zscmmm@users.noreply.github.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "loguru>=0.7.3",
+    "mneia-isbn>=0.0.3",
+    "opencv-python>=4.13.0.92",
+    "pillow>=12.2.0",
+    "pydantic-settings>=2.14.2",
+    "pymupdf>=1.27.2.3",
+    "pyzbar>=0.1.9",
+    "rapidocr>=3.9.0",
+    "rarfile>=4.2",
+    "onnxruntime>=1.27.0",
+]
+
+[dependency-groups]
+dev = [
+    "pdf_inspector>=0.2.0",
+    "mkdocs>=1.6.1,<2.0",
+    "mkdocs-autorefs>=1.4.1,<2.0",
+    "mkdocs-material>=9.6.12,<10.0",
+    "mkdocstrings[python]>=0.29.1,<1.0",
+    "pytest>=8.3.5",
+]
+
+
+# [project.scripts]
+# isbnx = "isbnx:main"
+
+[build-system]
+requires = ["uv_build>=0.11.24,<0.12.0"]
+build-backend = "uv_build"
+
+[[tool.uv.index]]
+url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+default = true
+
+
+
+[project.urls]
+Homepage = "https://github.com/zscmmm/isbnx"
+Documentation = "https://isbnx.readthedocs.org"
+Repository = "https://github.com/zscmmm/isbnx.git"
+Issues = "https://github.com/zscmmm/isbnx/issues"
+Changelog = "https://github.com/zscmmm/isbnx/blob/main/CHANGELOG.md"
