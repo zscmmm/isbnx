@@ -197,6 +197,94 @@ class PdfExtractor:
     """PDF ISBN 提取器。"""
 
     @classmethod
+    def export_pages(
+        cls,
+        pdf_path: str | Path,
+        out_dir: str | Path | None = None,
+        *,
+        dpi: float = 300,
+        target_size: tuple[int, int] | None = None,
+        fmt: str = "png",
+        exist_ok: bool = True,
+    ) -> Path:
+        """将 PDF 所有页导出为图片。
+
+        导出的图片统一放在 ``{pdf_stem}/`` 目录下，文件名格式为 ``{页码:04d}.png``。
+        例如 ``AAA.pdf`` → ``AAA/0001.png``、``AAA/0002.png``……
+
+        Args:
+            pdf_path: PDF 文件路径。
+            out_dir: 输出目录。默认取 PDF 同名目录（如 ``AAA.pdf`` → ``AAA/``）。
+            dpi: 输出 DPI，所有页统一分辨率（默认 ``300``）。
+                传 ``None`` 则用 PDF 原始 72 DPI。传 ``150`` 则 150 DPI。
+            target_size: 统一输出尺寸 ``(width, height)``（像素）。指定后
+                所有页会 resize 到此大小。与 ``dpi`` 互斥。
+            fmt: 输出格式（默认 ``"png"``，支持 ``"jpg"``、``"webp"`` 等）。
+            exist_ok: 若输出目录已存在是否继续（默认 ``True``）。
+
+        Returns:
+            输出目录的 ``Path``。
+
+        Raises:
+            FileNotFoundError: PDF 文件不存在。
+            ValueError: PDF 无法打开或有密码保护。
+            ValueError: ``dpi`` 和 ``target_size`` 同时指定。
+
+        Example::
+
+            # 导出为 300 DPI 图片（默认）
+            PdfExtractor.export_pages("book.pdf")
+
+            # 导出为原始 72 DPI
+            PdfExtractor.export_pages("book.pdf", dpi=None)
+
+            # 导出为固定尺寸
+            PdfExtractor.export_pages("book.pdf", target_size=(800, 1200))
+        """
+        if dpi is not None and target_size is not None:
+            raise ValueError("dpi 和 target_size 不能同时指定")
+
+        pdf_path = Path(pdf_path)
+        if not pdf_path.exists():
+            raise FileNotFoundError(f"PDF 文件不存在: {pdf_path}")
+
+        doc, open_error = _open_pdf(pdf_path)
+        if doc is None:
+            raise ValueError(open_error or "无法打开 PDF 文件")
+
+        out_dir = Path(out_dir or pdf_path.parent / pdf_path.stem)
+        out_dir.mkdir(parents=True, exist_ok=exist_ok)
+
+        digit = len(str(doc.page_count))
+        try:
+            for page_num in range(1, doc.page_count + 1):
+                if dpi is not None:
+                    # 固定 DPI：zoom = dpi / 72（PDF 默认 72 DPI）
+                    zoom = dpi / 72.0
+                    mat = fitz.Matrix(zoom, zoom)
+                    pix = doc[page_num - 1].get_pixmap(matrix=mat)
+                    img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+                else:
+                    # 原始分辨率（zoom=1.0，不作自动缩放）
+                    img = _render_page_to_image(
+                        doc,
+                        page_num,
+                        zoom=1.0,
+                        min_short_side=1,
+                        max_short_side=100000,
+                    )
+
+                if target_size is not None:
+                    img = img.resize(target_size, Image.Resampling.LANCZOS)
+
+                filename = f"{page_num:0{digit}d}.{fmt.lstrip('.')}"
+                img.save(str(out_dir / filename))
+        finally:
+            doc.close()
+
+        return out_dir
+
+    @classmethod
     def extract(cls, pdf_path: str | Path, detector=None) -> ExtractResult:
         """从 PDF 中提取 ISBN。
 
