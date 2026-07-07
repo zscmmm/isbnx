@@ -52,8 +52,8 @@ class DetectorConfig(BaseModel):
     conf_threshold: float = 0.3
     fallback_ratio: float = 0.6
     padding: int = 20
-    input_width: int = 640
-    input_height: int = 640
+    input_width: int = 1280
+    input_height: int = 1280
     letterbox_color: str = "114,114,114"
     num_threads: int = 4
 
