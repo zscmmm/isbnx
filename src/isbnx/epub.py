@@ -24,6 +24,11 @@ class EpubExtractor:
     _MAX_BYTES = 10 * 1024 * 1024
     _MAX_SCAN = 200
 
+    # ── 图片文件名前缀（封面/版权页图片优先扫描）──
+    _IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
+    _IMAGE_PREFIXES = ("cov", "leg")
+    _MAX_IMAGES = 10
+
     # ── 版权页文件名关键词（这些文件优先扫描）──
     _FRONT_KEYS = (
         "copyright",
@@ -66,6 +71,11 @@ class EpubExtractor:
                     isbn = cls._read_and_scan(zf, name)
                     if isbn:
                         return cls._ok(str(epub_path), t0, isbn)
+
+                # 3. 封面/版权页图片（文件名以 cov/leg 开头）──
+                result = cls._scan_images(zf, str(epub_path), t0)
+                if result:
+                    return result
 
             return cls._fail(str(epub_path), t0, "未找到有效 ISBN")
         except Exception as e:
@@ -122,6 +132,48 @@ class EpubExtractor:
             v = cls._validate(cls._clean(m.group(1)))
             if v:
                 return v
+        return None
+
+    # ═════════════════════════════════════════════════════
+    #  图片扫描（cov/leg 开头图片 → ONNX 检测 + OCR）
+    # ═════════════════════════════════════════════════════
+
+    @classmethod
+    def _scan_images(cls, zf: zipfile.ZipFile, source: str, t0: float) -> ExtractResult | None:
+        """扫描 EPUB 中文件名以 cov/leg 开头的图片，通过 ONNX 检测 + OCR 提取 ISBN。"""
+        # 收集符合条件的图片，cov 优先于 leg
+        cov: list[str] = []
+        leg: list[str] = []
+        for name in zf.namelist():
+            stem = Path(name).stem.lower()
+            if not name.lower().endswith(cls._IMAGE_EXTS):
+                continue
+            if stem.startswith("cov"):
+                cov.append(name)
+            elif stem.startswith("leg"):
+                leg.append(name)
+        image_names = (cov + leg)[: cls._MAX_IMAGES]
+        if not image_names:
+            return None
+
+        from isbnx.detector import get_detector
+        from isbnx.utils.io import load_image
+
+        detector = get_detector()
+        for name in image_names:
+            try:
+                raw = zf.read(name)
+                img = load_image(raw)
+                result = detector.process(
+                    img,
+                    source=f"{source}!{name}",
+                    source_type="epub",
+                )
+                if result.success:
+                    result.elapsed = time.perf_counter() - t0
+                    return result
+            except Exception:
+                continue
         return None
 
     # ═════════════════════════════════════════════════════

@@ -26,3 +26,4 @@ test_*.py
 debug_font.py
 debug_font2.py
 debug_raw.py
+sample/

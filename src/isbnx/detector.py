@@ -24,6 +24,42 @@ from isbnx.utils.isbn_utils import extract_isbn_from_lines, is_valid_isbn
 _ISBN_KEYWORD = re.compile(r"[1Il]\s*[S5]\s*[8B]\s*N", re.IGNORECASE)
 
 
+def _nms_numpy(boxes: np.ndarray, scores: np.ndarray, iou_thres: float = 0.45) -> np.ndarray:
+    """纯 numpy NMS，返回保留框的索引。"""
+    if boxes.size == 0:
+        return np.empty(0, dtype=np.int64)
+
+    x1 = boxes[:, 0]
+    y1 = boxes[:, 1]
+    x2 = boxes[:, 2]
+    y2 = boxes[:, 3]
+    areas = np.clip(x2 - x1, 0.0, None) * np.clip(y2 - y1, 0.0, None)
+    order = scores.argsort()[::-1]
+    keep: list[int] = []
+
+    while order.size > 0:
+        i = int(order[0])
+        keep.append(i)
+        if order.size == 1:
+            break
+
+        rest = order[1:]
+        xx1 = np.maximum(x1[i], x1[rest])
+        yy1 = np.maximum(y1[i], y1[rest])
+        xx2 = np.minimum(x2[i], x2[rest])
+        yy2 = np.minimum(y2[i], y2[rest])
+        w = np.clip(xx2 - xx1, 0.0, None)
+        h = np.clip(yy2 - yy1, 0.0, None)
+        inter = w * h
+        union = areas[i] + areas[rest] - inter
+
+        iou = np.zeros_like(inter, dtype=np.float32)
+        np.divide(inter, union, out=iou, where=union > 0)
+        order = rest[iou <= iou_thres]
+
+    return np.asarray(keep, dtype=np.int64)
+
+
 def _truncate_at_isbn_keyword(lines: list[str]) -> list[str]:
     """以 "ISBN" 关键词为中心截断 OCR 行，排除前面的无关数字干扰。
 
@@ -269,6 +305,12 @@ class Detector:
         Returns:
             [(box, score, class_id), ...] 按置信度降序排列，可能为空。
             box: [x1, y1, x2, y2] **在 640x640 画布上的像素坐标**（已统一）。
+
+        当前模型导出格式是 ``(1, 300, 6)``，每行依次为：
+        ``[x1, y1, x2, y2, score, class_id]``。
+
+        这是 end2end 模型的解码后输出，但导出时 ``nms=True`` 不可用，
+        因此这里还需要对候选框手动做一次 NMS。
         """
         detections = np.asarray(output, dtype=np.float32)
         if detections.ndim == 3:
@@ -276,29 +318,32 @@ class Detector:
         if detections.ndim != 2:
             raise ValueError(f"不支持的 ONNX 输出形状: {output.shape}")
 
-        threshold = settings.detector.conf_threshold
+        if detections.shape[1] != 6:
+            raise ValueError(f"不支持的 ONNX 输出形状: {output.shape}")
+
+        scores = detections[:, 4]
+        class_ids = detections[:, 5].astype(np.int64)
+        mask = scores >= settings.detector.conf_threshold
+        if not mask.any():
+            return []
+
+        boxes = detections[mask, :4].astype(np.float32)
+        scores = scores[mask]
+        class_ids = class_ids[mask]
+
         results: list[tuple[np.ndarray, float, int]] = []
+        # 按 class_id 分组做 NMS，避免不同类别互相抑制。
+        for class_id in np.unique(class_ids):
+            class_mask = class_ids == class_id
+            class_boxes = boxes[class_mask]
+            class_scores = scores[class_mask]
+            keep = _nms_numpy(class_boxes, class_scores, iou_thres=0.45)
+            for i in keep:
+                results.append((class_boxes[i], float(class_scores[i]), int(class_id)))
 
-        # ── 格式 1：NMS 输出，6 列 [bbox..., score, class_id] ──
-        if detections.shape[1] == 6:
-            scores = detections[:, 4]
-            mask = scores >= threshold
-            if not mask.any():
-                return []
+        results.sort(key=lambda x: x[1], reverse=True)
 
-            for i in np.where(mask)[0]:
-                score = float(scores[i])
-                raw_bbox = detections[i, :4].astype(np.float32)
-                class_id = int(detections[i, 5])
-
-                # YOLO: [x1, y1, x2, y2] 画布像素坐标，直接使用
-                box = raw_bbox
-                results.append((box, score, class_id))
-
-            results.sort(key=lambda x: x[1], reverse=True)
-            return results
-
-        raise ValueError(f"不支持的 ONNX 输出形状: {output.shape}")
+        return results
 
     def _scale_box(
         self,

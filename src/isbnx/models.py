@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from functools import cached_property
+from pathlib import Path
 from typing import Any, Literal
 
 from mneia_isbn import ISBN  # type: ignore
@@ -80,7 +81,7 @@ class Locate(BaseModel):
     """
 
     page: int
-    method: Literal["bookmark", "text", "onnx", "bookinfo", "leg001", "pdg", "epub", "meta"]
+    method: Literal["bookmark", "text", "onnx", "bookinfo", "leg001", "cov", "pdg", "epub", "meta"]
 
     extraction: Literal["text", "ocr", "opf", "opf+xhtml"] = "ocr"
     """数据提取方式。
@@ -118,6 +119,22 @@ class Locate(BaseModel):
             scores = ", ".join(f"{c.score:.3f}" for c in self.candidates)
             parts.append(f"candidates={len(self.candidates)} [{scores}]")
         return f"Locate({', '.join(parts)})"
+
+    def save(self, directory: str | Path, *, overwrite: bool = False) -> list[Path]:
+        """把所有 ONNX 候选裁剪图保存到指定目录。"""
+        target_dir = Path(directory)
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        saved_paths: list[Path] = []
+        for index, detect in enumerate(self.candidates, 1):
+            score_tag = int(round(detect.score * 10000))
+            filename = f"page{self.page:03d}_{detect.class_id}_{score_tag:03d}.png"
+            path = target_dir / filename
+            if path.exists() and not overwrite:
+                path = target_dir / f"page{self.page:03d}_{detect.class_id}_{score_tag:03d}_{index}.png"
+            detect.image.save(path)
+            saved_paths.append(path)
+        return saved_paths
 
 
 class Meta(BaseModel):
@@ -328,6 +345,25 @@ class ExtractResult(BaseModel):
 
         lines.append(")")
         return "\n".join(lines)
+
+    def save(self, output_dir: str | Path | None = None, *, overwrite: bool = False) -> list[Path]:
+        """保存 ONNX 候选裁剪图。
+
+        Args:
+            output_dir: 目标根目录。为 None 时，默认保存到源文件同名目录。
+            overwrite: 是否覆盖已存在的同名文件。
+
+        Returns:
+            成功写入的文件路径列表。若当前结果没有 ONNX 候选，则返回空列表。
+        """
+        if not self.locate or not self.locate.candidates:
+            return []
+
+        if output_dir is None:
+            source_path = Path(self.meta.source)
+            output_dir = source_path.with_suffix("")
+
+        return self.locate.save(output_dir, overwrite=overwrite)
 
     def __str__(self) -> str:
         return self.__repr__()

@@ -162,6 +162,10 @@ configure(
 
 所有提取结果使用 Pydantic 模型，可通过一致的接口访问：
 
+说明：当前 ONNX 模型输出为 end2end 解码后的 ``(1, 300, 6)`` 候选框，
+每行格式为 ``[x1, y1, x2, y2, score, class_id]``。导出时 ``nms=True`` 不可用，
+因此代码里会对这些候选框再做一次按类 NMS。
+
 ```python
 result = ISBNX().from_image("cover.png")
 
@@ -180,6 +184,11 @@ result.bookinfo.ssid       # SS 号（压缩包）
 result.locate.page         # 命中页码
 result.locate.method       # 定位方式（onnx / text / bookmark / ...）
 result.locate.score        # 检测置信度
+result.locate.candidates   # 所有 ONNX 候选框（仅 onnx 方法时有值）
+
+# 保存候选裁剪图
+result.save()              # 默认保存到源文件同名目录
+result.save("output/crops")
 
 # OCR 结果
 result.ocr.lines           # OCR 文本行

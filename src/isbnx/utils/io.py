@@ -10,7 +10,7 @@ from PIL import Image, ImageOps
 
 ExtractKind = Literal["image", "pdf", "epub", "mobi", "archive"]
 
-_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff")
+_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".pdg")
 _PDF_SUFFIXES = (".pdf",)
 _EPUB_SUFFIXES = (".epub",)
 _MOBI_SUFFIXES = (".mobi",)
@@ -74,3 +74,66 @@ def load_image(img: str | Image.Image | MatLike | Path | bytes) -> Image.Image:
     if array.ndim == 3 and array.shape[2] == 3:
         return Image.fromarray(array[:, :, ::-1], "RGB").convert("RGB")
     raise ValueError(f"Unsupported image array shape: {array.shape}")
+
+
+def pdg2png(
+    path: str | Path,
+    output: str | Path | None = None,
+    *,
+    overwrite: bool = False,
+    min_short: int | None = None,
+    max_long: int | None = None,
+) -> Path:
+    """将 PDG 文件解码并转换为 PNG 图片。
+
+    Args:
+        path: PDG 文件路径。
+        output: 输出 PNG 路径（默认自动替换后缀为 ``.png`` 到同目录）。
+        overwrite: 是否覆盖已存在的输出文件。
+        min_short: 最短边最小像素值，若图片过小则等比例放大到此值（默认不调整）。
+        max_long: 最长边最大像素值，若图片过大则等比例缩小到此值（默认不调整）。
+
+    Returns:
+        生成的 PNG 文件路径。
+
+    Raises:
+        FileNotFoundError: PDG 文件不存在。
+        ValueError: 输出文件已存在且 ``overwrite=False``。
+        RuntimeError: PDG 解码失败。
+    """
+    src = Path(path)
+    if not src.exists():
+        raise FileNotFoundError(f"PDG 文件不存在: {src}")
+
+    if output is None:
+        output = src.with_suffix(".png")
+    else:
+        output = Path(output)
+
+    if output.exists() and not overwrite:
+        raise ValueError(f"输出文件已存在: {output}（设置 overwrite=True 覆盖）")
+
+    from isbnx.archive import _pdg_to_image
+
+    data = src.read_bytes()
+    img = _pdg_to_image(data)
+    if img is None:
+        raise RuntimeError(f"PDG 解码失败: {src}")
+
+    # 尺寸约束调整（保持宽高比）
+    w, h = img.size
+    if min_short is not None or max_long is not None:
+        short, long_ = min(w, h), max(w, h)
+        scale = 1.0
+        if min_short is not None and short < min_short:
+            scale = max(scale, min_short / short)
+        if max_long is not None and long_ > max_long:
+            scale = min(scale, max_long / long_)
+        if scale != 1.0:
+            new_w = max(1, round(w * scale))
+            new_h = max(1, round(h * scale))
+            img = img.resize((new_w, new_h), Image.LANCZOS)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    img.save(output, "PNG")
+    return output

@@ -29,6 +29,7 @@ import time
 import zipfile
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Literal
 
 from PIL import Image
 
@@ -238,14 +239,28 @@ def _pdg_decode_with_dll(data: bytes) -> Image.Image | None:
                 pass
 
 
-def _extract_isbn_from_image(data: bytes, detector) -> str | None:
-    """将 PDG 字节解码为图片后运行 ONNX 检测 + OCR，返回 ISBN 字符串。"""
+def _extract_result_from_image(
+    data: bytes,
+    detector,
+    *,
+    source: str,
+    locate_page: int,
+    locate_method: Literal["leg001", "cov", "pdg"],
+) -> ExtractResult | None:
+    """将 PDG 字节解码为图片后运行 ONNX 检测 + OCR，返回完整提取结果。"""
     img = _pdg_to_image(data)
     if img is None:
         return None
     det = detector or get_detector()
-    result = det.process(img)
-    return result.bookinfo.isbn13 if result.bookinfo.isbn else None
+    result = det.process(img, source=source, source_type="archive")
+    if result.locate is not None:
+        result.locate.page = locate_page
+        result.locate.method = locate_method
+        result.locate.extraction = "ocr"
+    else:
+        result.locate = Locate(page=locate_page, method=locate_method, extraction="ocr")
+    result.meta = Meta(source=source, source_type="archive")
+    return result
 
 
 # ═══════════════════════════════════════════════════════════
@@ -519,22 +534,39 @@ class ArchiveExtractor:
                             elapsed=time.perf_counter() - t0,
                         )
 
-                # ── 步骤 3: leg001.pdg → 图片 → ONNX ──
-                leg_info = _get_info_ignore_case(arc, names, "leg001.pdg")
-                if leg_info is not None and getattr(leg_info, "file_size", 0) <= _MAX_PDG_SIZE:
-                    raw_pdg = _read_file_ignore_case(arc, names, "leg001.pdg")
-                    if raw_pdg:
-                        isbn_str = _extract_isbn_from_image(raw_pdg, detector)
-                        if isbn_str:
-                            return ExtractResult(
-                                bookinfo=BookInfo(isbn=isbn_str),
-                                meta=Meta(source=str(archive_path), source_type="archive"),
-                                locate=Locate(page=-10, method="leg001", extraction="ocr"),
-                                elapsed=time.perf_counter() - t0,
-                            )
+                # ── 步骤 3: leg/cov 开头的 PDG → 图片 → ONNX ──
+                all_pdg = _list_pdg(names)
+                leg_pdg: list[str] = []
+                cov_pdg: list[str] = []
+                for name in all_pdg:
+                    stem = Path(name).stem.lower()
+                    if stem.startswith("leg"):
+                        leg_pdg.append(name)
+                    elif stem.startswith("cov"):
+                        cov_pdg.append(name)
+                # leg 优先于 cov
+                for pdg_name in leg_pdg + cov_pdg:
+                    try:
+                        info = arc.getinfo(pdg_name)
+                        if getattr(info, "file_size", 0) > _MAX_PDG_SIZE:
+                            continue
+                        raw = arc.read(pdg_name)
+                    except Exception:
+                        continue
+                    locate_method = "leg001" if Path(pdg_name).stem.lower().startswith("leg") else "cov"
+                    result = _extract_result_from_image(
+                        raw,
+                        detector,
+                        source=str(archive_path),
+                        locate_page=-10,
+                        locate_method=locate_method,
+                    )
+                    if result and result.success:
+                        result.elapsed = time.perf_counter() - t0
+                        return result
 
                 # ── 步骤 4: 兜底 — 前 N 个 PDG ──
-                pdg_files = _list_pdg(names)
+                pdg_files = [n for n in all_pdg if n not in set(leg_pdg + cov_pdg)]
                 fallback_count = settings.archive.pdg_fallback_count
                 for idx, pdg_name in enumerate(pdg_files[:fallback_count]):
                     try:
@@ -544,14 +576,16 @@ class ArchiveExtractor:
                         raw_pdg = arc.read(pdg_name)
                     except Exception:
                         continue
-                    isbn_str = _extract_isbn_from_image(raw_pdg, detector)
-                    if isbn_str:
-                        return ExtractResult(
-                            bookinfo=BookInfo(isbn=isbn_str),
-                            meta=Meta(source=str(archive_path), source_type="archive"),
-                            locate=Locate(page=idx + 1, method="pdg", extraction="ocr"),
-                            elapsed=time.perf_counter() - t0,
-                        )
+                    result = _extract_result_from_image(
+                        raw_pdg,
+                        detector,
+                        source=str(archive_path),
+                        locate_page=idx + 1,
+                        locate_method="pdg",
+                    )
+                    if result and result.success:
+                        result.elapsed = time.perf_counter() - t0
+                        return result
 
                 # 所有步骤均失败
                 return ExtractResult(

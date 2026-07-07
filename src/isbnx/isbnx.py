@@ -57,8 +57,11 @@ class ISBNX:
     ) -> ExtractResult:
         """从单张图片文件中提取 ISBN。
 
+        支持常见图片格式（PNG/JPG/WebP/BMP 等）以及加密或非加密的 PDG 文件。
+        PDG 文件会自动尝试解密后提取。
+
         Args:
-            path: 图片文件路径（支持 PNG/JPG/WebP 等常见格式）。
+            path: 图片文件路径。
             page: 页码（预留参数，多页图片暂不支持）。
 
         Returns:
@@ -67,7 +70,23 @@ class ISBNX:
         if page != 1:
             raise NotImplementedError("多页图片暂不支持指定页码")
 
-        image = load_image(path)
+        path = Path(path)
+        if path.suffix.lower() == ".pdg":
+            from isbnx.archive import _pdg_to_image
+
+            data = path.read_bytes()
+            image = _pdg_to_image(data)
+            if image is None:
+                from isbnx.models import BookInfo, Meta
+
+                return ExtractResult(
+                    bookinfo=BookInfo(),
+                    meta=Meta(source=str(path), source_type="image"),
+                    error="PDG 文件解码失败",
+                )
+        else:
+            image = load_image(path)
+
         return self._detector.process(image, source=str(path), source_type="image")
 
     def extract(

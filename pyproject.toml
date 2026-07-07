@@ -1,6 +1,6 @@
 [project]
 name = "isbnx"
-version = "0.0.3"
+version = "0.0.4"
 description = "从 PDF、图片、压缩包和 EPUB 文件中提取 ISBN 号，支持 ONNX 检测和 OCR 识别"
 readme = "README.md"
 authors = [
@@ -22,6 +22,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "cfunbook>=0.1.16",
     "pdf_inspector>=0.2.0",
     "mkdocs>=1.6.1,<2.0",
     "mkdocs-autorefs>=1.4.1,<2.0",
