@@ -18,7 +18,7 @@ from mneia_isbn import ISBN as _ISBN
 # 例如：ISBN 978唱7唱03唱027084唱9 → ISBN 978-7-03-027084-9
 # 限制最多 3 个 CJK 字符（乱码通常为单字，避免误伤正常中文长句）
 # 注意：必须放在 NFKC 规范化之后、ISBN 正则匹配之前
-_CJK_BETWEEN_DIGITS = re.compile(r"(?<=\d)\s*[\u4e00-\u9fff]{0,3}\s*(?=\d)")
+_CJK_BETWEEN_DIGITS = re.compile(r"(?<=\d)\s*[\u4e00-\u9fff]{1,3}\s*(?=\d)")
 
 _ISBN_MARKER = re.compile(
     r"(?:[1Il]\s*[S5]\s*[8B]\s*N\s*[:：]?\s*)?"
