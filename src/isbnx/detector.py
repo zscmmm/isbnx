@@ -183,7 +183,11 @@ class Detector:
                     isbn_str = barcode
                 else:
                     w, h = detect.image.size
-                    ocr_img = detect.image.resize((w * 2, h * 2), Image.Resampling.LANCZOS) if min(w, h) > 100 else detect.image
+                    ocr_img = (
+                        detect.image.resize((w * 2, h * 2), Image.Resampling.LANCZOS)
+                        if min(w, h) > 100
+                        else detect.image
+                    )
                     ocr_result = self._ocr.recognize(ocr_img)
                     if ocr_result is not None:
                         isbn_str = extract_isbn_from_lines(ocr_result.lines)

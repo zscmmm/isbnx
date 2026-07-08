@@ -121,7 +121,7 @@ class MobiExtractor:
 
         rec0_end = layout.offsets[1] if len(layout.offsets) > 1 else len(data)
         if layout.text_start < rec0_end:
-            chunks.append(data[layout.text_start:rec0_end])
+            chunks.append(data[layout.text_start : rec0_end])
 
         for rec_idx in range(1, layout.text_records):
             if rec_idx >= len(layout.offsets):

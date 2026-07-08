@@ -67,7 +67,7 @@ result = ISBNX(config=config).from_image("cover.png")
 
 `extract()` 会先根据文件后缀快速判断提取路径：
 
-- 图片：`.png` / `.jpg` / `.jpeg` / `.webp` / `.bmp` / `.gif` / `.tif` / `.tiff`
+- 图片：`.png` / `.jpg` / `.jpeg` / `.webp` / `.bmp`
 - PDF：`.pdf`
 - EPUB：`.epub`
 - MOBI：`.mobi`

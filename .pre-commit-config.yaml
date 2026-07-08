@@ -1,0 +1,11 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.20
+    hooks:
+      - id: ruff-format
+        name: ruff format
+        description: 用 Ruff 自动格式化 Python 代码
+      - id: ruff
+        name: ruff lint
+        description: 用 Ruff 检查并自动修复代码问题
+        args: [--fix, --exit-non-zero-on-fix]

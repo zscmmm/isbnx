@@ -130,9 +130,8 @@ def extract_cip_fields(lines: list[str]) -> BookInfo:
     if cip_idx == -1 or cip_idx + 1 >= len(lines):
         return _extract_generic(lines)
 
-    # ── ISBN 和 CIP 核字号（全局搜索，不受上下文限制）──
+    # ── ISBN（全局搜索，不受上下文限制）──
     isbn = extract_isbn(lines)
-    cip_no = extract_cip(lines)
 
     if isbn:
         return BookInfo(isbn=isbn)

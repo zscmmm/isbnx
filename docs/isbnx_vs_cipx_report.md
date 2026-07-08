@@ -52,7 +52,7 @@
 ### 2.3 图片样本（Images）
 
 - **数据源**：`D:\mmm\data\images`
-- **文件格式**：`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tiff`
+- **文件格式**：`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`
 - **测试方法**：`from_image`
 - **样本总数**：**1,723**
 - **样本构成**：

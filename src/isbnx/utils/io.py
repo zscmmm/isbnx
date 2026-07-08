@@ -10,7 +10,7 @@ from PIL import Image, ImageOps
 
 ExtractKind = Literal["image", "pdf", "epub", "mobi", "archive"]
 
-_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".pdg")
+_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".pdg")
 _PDF_SUFFIXES = (".pdf",)
 _EPUB_SUFFIXES = (".epub",)
 _MOBI_SUFFIXES = (".mobi",)
@@ -132,7 +132,7 @@ def pdg2png(
         if scale != 1.0:
             new_w = max(1, round(w * scale))
             new_h = max(1, round(h * scale))
-            img = img.resize((new_w, new_h), Image.LANCZOS)
+            img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     img.save(output, "PNG")

@@ -33,6 +33,7 @@ class ISBNX:
 
         # 自定义配置
         from isbnx.config import Settings
+
         config = Settings(strict=2)
         config.ocr.ocr_model = "medium"
         result = ISBNX(config=config).from_image("cover.png")
@@ -62,13 +63,13 @@ class ISBNX:
 
         Args:
             path: 图片文件路径。
-            page: 页码（预留参数，多页图片暂不支持）。
+            page: 页码（预留参数，仅兼容单页图片）。
 
         Returns:
             :class:`~isbnx.models.ExtractResult` 包含 ISBN 提取结果。
         """
         if page != 1:
-            raise NotImplementedError("多页图片暂不支持指定页码")
+            raise NotImplementedError("仅支持单页图片")
 
         path = Path(path)
         if path.suffix.lower() == ".pdg":

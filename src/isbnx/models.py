@@ -346,6 +346,39 @@ class ExtractResult(BaseModel):
         lines.append(")")
         return "\n".join(lines)
 
+    def to_dict(self) -> dict[str, Any]:
+        """转为字典（JSON 序列化友好，排除 PIL Image 等不可序列化的字段）。
+
+        Returns:
+            包含提取结果核心字段的字典。
+        """
+        b = self.bookinfo
+        return {
+            "success": self.success,
+            "isbn": b.isbn,
+            "ssid": b.ssid,
+            "source": self.meta.source,
+            "source_type": self.meta.source_type,
+            "method": self.locate.method if self.locate else None,
+            "page": self.locate.page if self.locate else None,
+            "elapsed": round(self.elapsed, 3) if self.elapsed is not None else None,
+            "error": self.error,
+        }
+
+    def to_json(self, *, indent: int = 2, ensure_ascii: bool = False) -> str:
+        """转为 JSON 字符串。
+
+        Args:
+            indent: JSON 缩进空格数（默认 2）。
+            ensure_ascii: 是否确保 ASCII 输出（默认 False，保留中文）。
+
+        Returns:
+            JSON 格式的提取结果字符串。
+        """
+        import json
+
+        return json.dumps(self.to_dict(), indent=indent, ensure_ascii=ensure_ascii)
+
     def save(self, output_dir: str | Path | None = None, *, overwrite: bool = False) -> list[Path]:
         """保存 ONNX 候选裁剪图。
 
