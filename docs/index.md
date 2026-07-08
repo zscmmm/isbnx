@@ -1,6 +1,6 @@
 # isbnx
 
-从 PDF / 图片 / 压缩包 / EPUB 文件中提取 ISBN 号，支持 ONNX 深度学习检测和 OCR 识别。
+从 PDF / 图片 / EPUB / MOBI / 压缩包文件中提取 ISBN 号，支持 ONNX 深度学习检测和 OCR 识别。
 
 ## 快速开始
 
@@ -16,12 +16,9 @@ if result.success:
 from isbnx import ISBNX
 
 result = ISBNX().from_pdf("book.pdf")
-
-# 从压缩包提取
 result = ISBNX().from_archive("book.zip")
-
-# 从 EPUB 提取
 result = ISBNX().from_epub("book.epub")
+result = ISBNX().from_mobi("book.mobi")
 ```
 
 ## 安装
@@ -31,6 +28,16 @@ pip install isbnx
 # 或
 uv add isbnx
 ```
+
+## 支持格式
+
+| 类型 | 格式 | 提取策略 |
+|------|------|----------|
+| **图片** | PNG / JPG / WebP / BMP / PDG | ONNX 检测 → OCR / 条码解码 |
+| **PDF** | PDF | 书签定位 + 文本搜索（文本型）→ 渲染图片检测（扫描件） |
+| **EPUB** | EPUB | OPF 元数据优先 → XHTML 内容扫描 |
+| **MOBI** | MOBI | EXTH 元数据优先 → 文本记录扫描 |
+| **压缩包** | ZIP / RAR / UVZ | meta.xml → bookinfo.dat → leg001.pdg → 兜底 PDG 图片 |
 
 ## 核心流程
 
@@ -73,8 +80,4 @@ result = ISBNX(config=config).from_image("cover.png")
 - MOBI：`.mobi`
 - 压缩包：`.zip` / `.rar` / `.uvz`
 
-这一步是轻量预检，不做内容嗅探；真正的文件内容校验仍由对应提取器负责。
-
-## 未完成
-
-- LLM解析 
+这一步是轻量预检，不做内容嗅探；真正的文件内容校验仍由对应提取器负责。 
