@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from isbnx.models import BookInfo, ExtractResult, Meta
+from isbnx.utils.filename import extract_from_filename
 
 
 @dataclass(frozen=True)
@@ -32,11 +33,25 @@ class MobiExtractor:
     # ═════════════════════════════════════════════════════
 
     @classmethod
-    def extract(cls, mobi_path: str | Path) -> ExtractResult:
+    def extract(
+        cls,
+        mobi_path: str | Path,
+        *,
+        filename: bool = False,
+    ) -> ExtractResult:
         t0 = time.perf_counter()
         mobi_path = Path(mobi_path)
         if not mobi_path.exists():
             return cls._fail(str(mobi_path), t0, "MOBI 文件不存在")
+
+        if filename:
+            info = extract_from_filename(mobi_path)
+            if info:
+                return ExtractResult(
+                    bookinfo=info,
+                    meta=Meta(source=str(mobi_path), source_type="mobi"),
+                    elapsed=0.0,
+                )
 
         try:
             data = mobi_path.read_bytes()

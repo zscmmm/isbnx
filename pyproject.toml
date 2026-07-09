@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
+    "cfunbook>=0.1.17",
     "loguru>=0.7.3",
     "mneia-isbn>=0.0.3",
     "onnxruntime>=1.27.0",

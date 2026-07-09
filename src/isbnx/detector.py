@@ -9,8 +9,6 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Literal
 
-import numpy as np
-import onnxruntime as ort
 from PIL import Image
 
 from isbnx.config import settings
@@ -24,8 +22,10 @@ from isbnx.utils.isbn_utils import extract_isbn_from_lines, is_valid_isbn
 _ISBN_KEYWORD = re.compile(r"[1Il]\s*[S5]\s*[8B]\s*N", re.IGNORECASE)
 
 
-def _nms_numpy(boxes: np.ndarray, scores: np.ndarray, iou_thres: float = 0.45) -> np.ndarray:
+def _nms_numpy(boxes, scores, iou_thres: float = 0.45):
     """纯 numpy NMS，返回保留框的索引。"""
+    import numpy as np
+
     if boxes.size == 0:
         return np.empty(0, dtype=np.int64)
 
@@ -255,7 +255,9 @@ class Detector:
         return ISBNXRapidOCR()
 
     @cached_property
-    def _session(self) -> ort.InferenceSession:
+    def _session(self):
+        import onnxruntime as ort
+
         sess_options = ort.SessionOptions()
         sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         sess_options.intra_op_num_threads = settings.detector.num_threads
@@ -277,7 +279,9 @@ class Detector:
             return p.resolve()
         return p
 
-    def _preprocess(self, image: Image.Image) -> tuple[np.ndarray, float, int, int]:
+    def _preprocess(self, image):
+        import numpy as np
+
         target_w = settings.detector.input_width
         target_h = settings.detector.input_height
         width, height = image.size
@@ -296,14 +300,18 @@ class Detector:
         tensor = array.transpose(2, 0, 1)[None]
         return np.ascontiguousarray(tensor), scale, pad_x, pad_y
 
-    def _run(self, tensor: np.ndarray) -> np.ndarray:
+    def _run(self, tensor):
+        import numpy as np
+
         input_name = self._session.get_inputs()[0].name
         outputs = self._session.run(None, {input_name: tensor})
         if not outputs:
             raise RuntimeError("ONNX 模型未返回任何输出")
         return np.asarray(outputs[0], dtype=np.float32)
 
-    def _pick_boxes(self, output: np.ndarray) -> list[tuple[np.ndarray, float, int]]:
+    def _pick_boxes(self, output):
+        import numpy as np
+
         """从 ONNX 输出中取所有满足置信度阈值的检测框。
 
         Returns:
@@ -351,12 +359,14 @@ class Detector:
 
     def _scale_box(
         self,
-        box: np.ndarray,
+        box,
         image_size: tuple[int, int],
         scale: float,
         pad_x: int,
         pad_y: int,
-    ) -> tuple[int, int, int, int] | None:
+    ):
+        import numpy as np
+
         width, height = image_size
         x1, y1, x2, y2 = box.astype(float)
         pad = settings.detector.padding

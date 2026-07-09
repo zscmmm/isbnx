@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from isbnx.archive import ArchiveExtractor
-from isbnx.config import Settings, configure, settings
-from isbnx.detector import get_detector
-from isbnx.epub import EpubExtractor
-from isbnx.mobi import MobiExtractor
-from isbnx.models import ExtractResult
-from isbnx.pdf import PdfExtractor
-from isbnx.utils.io import detect_file_kind, load_image, require_suffix
+from isbnx.utils.io import detect_file_kind
+
+if TYPE_CHECKING:
+    from isbnx.config import Settings
+    from isbnx.detector import Detector
+    from isbnx.models import ExtractResult
 
 
 class ISBNX:
@@ -40,12 +39,25 @@ class ISBNX:
     """
 
     def __init__(self, config: Settings | None = None) -> None:
+        from isbnx.config import settings
+
         self.config = config or settings
         self._apply_config()
-        self._detector = get_detector()  # 预热 ONNX + OCR
+        self._detector: Detector | None = None  # 懒加载，首次需要时再初始化
+
+    @property
+    def detector(self) -> Detector:
+        """获取检测器（懒加载，首次访问时预热 ONNX + OCR）。"""
+        from isbnx.detector import get_detector
+
+        if self._detector is None:
+            self._detector = get_detector()
+        return self._detector
 
     def _apply_config(self) -> None:
         """将实例级配置同步到全局 settings 对象。"""
+        from isbnx.config import configure, settings
+
         if self.config is not settings:
             configure(**self.config.model_dump())
 
@@ -55,6 +67,8 @@ class ISBNX:
         self,
         path: str | Path,
         page: int = 1,
+        *,
+        filename: bool = False,
     ) -> ExtractResult:
         """从单张图片文件中提取 ISBN。
 
@@ -64,21 +78,36 @@ class ISBNX:
         Args:
             path: 图片文件路径。
             page: 页码（预留参数，仅兼容单页图片）。
+            filename: 是否优先从文件名中提取 ISBN。
 
         Returns:
             :class:`~isbnx.models.ExtractResult` 包含 ISBN 提取结果。
         """
+        path = Path(path)
+
+        if filename:
+            from isbnx.utils.filename import extract_from_filename
+
+            info = extract_from_filename(path)
+            if info:
+                from isbnx.models import BookInfo, ExtractResult, Meta
+
+                return ExtractResult(
+                    bookinfo=info,
+                    meta=Meta(source=str(path), source_type="image"),
+                    elapsed=0.0,
+                )
+
         if page != 1:
             raise NotImplementedError("仅支持单页图片")
 
-        path = Path(path)
         if path.suffix.lower() == ".pdg":
             from isbnx.archive import _pdg_to_image
 
             data = path.read_bytes()
             image = _pdg_to_image(data)
             if image is None:
-                from isbnx.models import BookInfo, Meta
+                from isbnx.models import BookInfo, ExtractResult, Meta
 
                 return ExtractResult(
                     bookinfo=BookInfo(),
@@ -86,32 +115,47 @@ class ISBNX:
                     error="PDG 文件解码失败",
                 )
         else:
+            from isbnx.utils.io import load_image
+
             image = load_image(path)
 
-        return self._detector.process(image, source=str(path), source_type="image")
+        return self.detector.process(image, source=str(path), source_type="image")
 
     def extract(
         self,
         path: str | Path,
         page: int = 1,
+        *,
+        filename: bool = False,
     ) -> ExtractResult:
-        """根据文件后缀自动选择对应的提取方法。"""
+        """根据文件后缀自动选择对应的提取方法。
+
+        Args:
+            path: 文件路径。
+            page: 页码，仅对图片有效。
+            filename: 是否优先从文件名中提取 ISBN。
+
+        Returns:
+            :class:`~isbnx.models.ExtractResult` 包含 ISBN 提取结果。
+        """
         kind = detect_file_kind(path)
         if kind == "image":
-            return self.from_image(path, page=page)
+            return self.from_image(path, page=page, filename=filename)
         if kind == "pdf":
-            return self.from_pdf(path)
+            return self.from_pdf(path, filename=filename)
         if kind == "epub":
-            return self.from_epub(path)
+            return self.from_epub(path, filename=filename)
         if kind == "mobi":
-            return self.from_mobi(path)
-        return self.from_archive(path)
+            return self.from_mobi(path, filename=filename)
+        return self.from_archive(path, filename=filename)
 
     # ── PDF ──
 
     def from_pdf(
         self,
         path: str | Path,
+        *,
+        filename: bool = False,
     ) -> ExtractResult:
         """从 PDF 文件中提取 ISBN。
 
@@ -120,18 +164,37 @@ class ISBNX:
 
         Args:
             path: PDF 文件路径。
+            filename: 是否优先从文件名中提取 ISBN。
 
         Returns:
             :class:`~isbnx.models.ExtractResult` 包含 ISBN 提取结果。
         """
+        from isbnx.utils.io import require_suffix
+
         require_suffix(path, (".pdf",), "PDF")
-        return PdfExtractor.extract(path, detector=self._detector)
+        if filename:
+            from isbnx.utils.filename import extract_from_filename
+
+            info = extract_from_filename(path)
+            if info:
+                from isbnx.models import ExtractResult, Meta
+
+                return ExtractResult(
+                    bookinfo=info,
+                    meta=Meta(source=str(path), source_type="pdf"),
+                    elapsed=0.0,
+                )
+        from isbnx.pdf import PdfExtractor
+
+        return PdfExtractor.extract(path, detector=self.detector)
 
     # ── EPUB ──
 
     def from_epub(
         self,
         path: str | Path,
+        *,
+        filename: bool = False,
     ) -> ExtractResult:
         """从 EPUB 文件中提取 ISBN。
 
@@ -140,11 +203,28 @@ class ISBNX:
 
         Args:
             path: EPUB 文件路径。
+            filename: 是否优先从文件名中提取 ISBN。
 
         Returns:
             :class:`~isbnx.models.ExtractResult` 包含 ISBN 提取结果。
         """
+        from isbnx.utils.io import require_suffix
+
         require_suffix(path, (".epub",), "EPUB")
+        if filename:
+            from isbnx.utils.filename import extract_from_filename
+
+            info = extract_from_filename(path)
+            if info:
+                from isbnx.models import ExtractResult, Meta
+
+                return ExtractResult(
+                    bookinfo=info,
+                    meta=Meta(source=str(path), source_type="epub"),
+                    elapsed=0.0,
+                )
+        from isbnx.epub import EpubExtractor
+
         return EpubExtractor.extract(path)
 
     # ── MOBI ──
@@ -152,6 +232,8 @@ class ISBNX:
     def from_mobi(
         self,
         path: str | Path,
+        *,
+        filename: bool = False,
     ) -> ExtractResult:
         """从 MOBI 文件中提取 ISBN。
 
@@ -159,10 +241,25 @@ class ISBNX:
 
         Args:
             path: MOBI 文件路径。
+            filename: 是否优先从文件名中提取 ISBN。
 
         Returns:
             :class:`~isbnx.models.ExtractResult` 包含 ISBN 提取结果。
         """
+        if filename:
+            from isbnx.utils.filename import extract_from_filename
+
+            info = extract_from_filename(path)
+            if info:
+                from isbnx.models import ExtractResult, Meta
+
+                return ExtractResult(
+                    bookinfo=info,
+                    meta=Meta(source=str(path), source_type="mobi"),
+                    elapsed=0.0,
+                )
+        from isbnx.mobi import MobiExtractor
+
         return MobiExtractor.extract(path)
 
     # ── 压缩包（PDG / 其它） ──
@@ -170,33 +267,55 @@ class ISBNX:
     def from_archive(
         self,
         path: str | Path,
+        *,
+        filename: bool = False,
     ) -> ExtractResult:
         """从压缩包（zip/uvz）中提取 ISBN。
 
         数据来源优先级（按速度降序）：
 
-        1. **meta.xml** — XML 元数据，含 ``<ssid>`` / ``<isbn>``（最快，~10-20ms）
-        2. **bookinfo.dat** — 超星 PDG 配置，含 ISBN / SSID（~5-10ms）
-        3. **leg001.pdg** — 版权页图片，ONNX 检测 + OCR 提取（~200-500ms）
-        4. **兜底 PDG** — 前 N 个 PDG 文件（由 ``archive_pdg_fallback_count`` 控制）
+        1. **文件名** — 从文件名中提取（``filename=True`` 时）
+        2. **meta.xml** — XML 元数据，含 ``<ssid>`` / ``<isbn>``（最快，~10-20ms）
+        3. **bookinfo.dat** — 超星 PDG 配置，含 ISBN / SSID（~5-10ms）
+        4. **leg001.pdg** — 版权页图片，ONNX 检测 + OCR 提取（~200-500ms）
+        5. **兜底 PDG** — 前 N 个 PDG 文件（由 ``archive_pdg_fallback_count`` 控制）
 
         meta.xml 和 bookinfo.dat 的结果会**合并**（前面的来源优先级更高）。
         合并后 ISBN 或 SSID 任一有效即返回，不继续走图片路径。
 
         Args:
             path: 压缩包文件路径。
+            filename: 是否优先从文件名中提取 ISBN。
 
         Returns:
             :class:`~isbnx.models.ExtractResult` 包含 ISBN 提取结果。
         """
+        from isbnx.utils.io import require_suffix
+
         require_suffix(path, (".zip", ".rar", ".uvz"), "压缩包")
-        return ArchiveExtractor.extract(path, detector=self._detector)
+        if filename:
+            from isbnx.utils.filename import extract_from_filename
+
+            info = extract_from_filename(path)
+            if info:
+                from isbnx.models import ExtractResult, Meta
+
+                return ExtractResult(
+                    bookinfo=info,
+                    meta=Meta(source=str(path), source_type="archive"),
+                    elapsed=0.0,
+                )
+        from isbnx.archive import ArchiveExtractor
+
+        return ArchiveExtractor.extract(path, detector=self.detector)
 
 
 def extract(
     path: str | Path,
     config: Settings | None = None,
     page: int = 1,
+    *,
+    filename: bool = False,
 ) -> ExtractResult:
     """通用提取函数，根据后缀自动分发到最合适的提取入口。
 
@@ -204,8 +323,27 @@ def extract(
         path: 文件路径，支持图片 / PDF / EPUB / MOBI / 压缩包。
         config: 可选的配置对象，若不传则使用全局配置。
         page: 页码，仅对图片有效，PDF/EPUB/MOBI/压缩包忽略。
+        filename: 是否优先从文件名中提取 ISBN。
 
     Returns:
         :class:`~isbnx.models.ExtractResult` 包含 ISBN 提取结果。
     """
-    return ISBNX(config=config).extract(path, page=page)
+    if filename:
+        from isbnx.utils.filename import extract_from_filename
+
+        info = extract_from_filename(path)
+        if info:
+            try:
+                _kind = detect_file_kind(path)
+            except ValueError:
+                _kind = "pdf"
+            from isbnx.models import ExtractResult, Meta
+
+            return ExtractResult(
+                bookinfo=info,
+                meta=Meta(source=str(path), source_type=_kind),
+                elapsed=0.0,
+            )
+    from isbnx.isbnx import ISBNX
+
+    return ISBNX(config=config).extract(path, page=page, filename=filename)

@@ -8,6 +8,7 @@ import zipfile
 from pathlib import Path
 
 from isbnx.models import BookInfo, ExtractResult, Meta
+from isbnx.utils.filename import extract_from_filename
 
 
 class EpubExtractor:
@@ -50,11 +51,25 @@ class EpubExtractor:
     # ═════════════════════════════════════════════════════
 
     @classmethod
-    def extract(cls, epub_path: str | Path) -> ExtractResult:
+    def extract(
+        cls,
+        epub_path: str | Path,
+        *,
+        filename: bool = False,
+    ) -> ExtractResult:
         t0 = time.perf_counter()
         epub_path = Path(epub_path)
         if not epub_path.exists():
             return cls._fail(str(epub_path), t0, "EPUB 文件不存在")
+
+        if filename:
+            info = extract_from_filename(epub_path)
+            if info:
+                return ExtractResult(
+                    bookinfo=info,
+                    meta=Meta(source=str(epub_path), source_type="epub"),
+                    elapsed=0.0,
+                )
 
         try:
             with zipfile.ZipFile(epub_path, "r") as zf:

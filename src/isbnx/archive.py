@@ -36,6 +36,7 @@ from PIL import Image
 from isbnx.config import settings
 from isbnx.detector import Detector, get_detector
 from isbnx.models import BookInfo, ExtractResult, Locate, Meta
+from isbnx.utils.filename import extract_from_filename
 
 # ── 图片文件签名 ──
 _JPEG_HEADER = b"\xff\xd8\xff"
@@ -458,18 +459,34 @@ class ArchiveExtractor:
     """压缩包（zip/rar/uvz）ISBN 提取器。"""
 
     @classmethod
-    def extract(cls, archive_path: str | Path, detector: Detector | None = None) -> ExtractResult:
+    def extract(
+        cls,
+        archive_path: str | Path,
+        detector: Detector | None = None,
+        *,
+        filename: bool = False,
+    ) -> ExtractResult:
         """从压缩包（zip/rar/uvz）中提取 ISBN。
 
         Args:
             archive_path: 压缩包文件路径。
             detector: 外部传入的 Detector 实例，为 None 时使用全局单例。
+            filename: 是否优先从文件名中提取 ISBN。
 
         Returns:
             ExtractResult — 包含 ISBN、源信息等。
         """
         t0 = time.perf_counter()
         archive_path = Path(archive_path)
+
+        if filename:
+            info = extract_from_filename(archive_path)
+            if info:
+                return ExtractResult(
+                    bookinfo=info,
+                    meta=Meta(source=str(archive_path), source_type="archive"),
+                    elapsed=0.0,
+                )
 
         try:
             with _open_archive(archive_path) as arc:

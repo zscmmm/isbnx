@@ -27,6 +27,7 @@ from isbnx.config import settings
 from isbnx.detector import get_detector
 from isbnx.models import BookInfo, ExtractResult, Locate, Meta, OCRResult
 from isbnx.pdf_type import detect_pdf_type, detect_pdf_type2  # noqa: F401
+from isbnx.utils.filename import extract_from_filename
 from isbnx.utils.isbn_utils import extract_isbn
 
 _pymupdf._g_out_message = open(os.devnull, "w", encoding="utf-8")
@@ -285,11 +286,18 @@ class PdfExtractor:
         return out_dir
 
     @classmethod
-    def extract(cls, pdf_path: str | Path, detector=None) -> ExtractResult:
+    def extract(
+        cls,
+        pdf_path: str | Path,
+        detector=None,
+        *,
+        filename: bool = False,
+    ) -> ExtractResult:
         """从 PDF 中提取 ISBN。
 
         Args:
-            pdf_path: PDF 文件路径。
+            pdf_path: PDF 文件路径.
+            filename: 是否优先从文件名中提取 ISBN。
 
         Returns:
             ExtractResult — 包含 ISBN、定位信息、耗时等。
@@ -297,6 +305,15 @@ class PdfExtractor:
 
         t0 = time.perf_counter()
         pdf_path = Path(pdf_path)
+
+        if filename:
+            info = extract_from_filename(pdf_path)
+            if info:
+                return ExtractResult(
+                    bookinfo=info,
+                    meta=Meta(source=str(pdf_path), source_type="pdf"),
+                    elapsed=0.0,
+                )
 
         # ── 打开 PDF ──
         doc, open_error = _open_pdf(pdf_path)
