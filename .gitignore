@@ -28,3 +28,6 @@ debug_font2.py
 debug_raw.py
 sample/
 tests/
+*_report.csv
+batch_empty.csv
+*_empty.csv

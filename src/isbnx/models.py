@@ -257,6 +257,10 @@ class ExtractResult(BaseModel):
     # ── OCR 识别 ──
     ocr: OCRResult | None = None
 
+    # ── 来源标记 ──
+    from_filename: bool = False
+    """ISBN/SSID 是否来自文件名提取（而非文件内容）。"""
+
     # ── 其他信息 ──
     elapsed: float | None = None
     error: str | None = None

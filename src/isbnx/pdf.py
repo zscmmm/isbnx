@@ -23,7 +23,7 @@ import fitz  # PyMuPDF
 import pymupdf as _pymupdf
 from PIL import Image
 
-from isbnx.config import settings
+from isbnx.config import PDFConfig, settings
 from isbnx.detector import get_detector
 from isbnx.models import BookInfo, ExtractResult, Locate, Meta, OCRResult
 from isbnx.pdf_type import detect_pdf_type, detect_pdf_type2  # noqa: F401
@@ -93,12 +93,22 @@ def _check_bookmarks(doc: fitz.Document) -> list[int]:
     return [page for page, _ in matched]
 
 
-def _get_candidate_pages(page_count: int) -> list[int]:
-    """生成候选页码列表（1-indexed）。"""
-    front_start = max(1, settings.pdf.front_start)
-    front_end = min(page_count, settings.pdf.front_end)
-    back_start = max(1, page_count - settings.pdf.back_start + 1)
-    back_end = max(1, page_count - settings.pdf.back_end + 1)
+def _get_candidate_pages(
+    page_count: int,
+    *,
+    pdf_config: PDFConfig | None = None,
+) -> list[int]:
+    """生成候选页码列表（1-indexed）。
+
+    Args:
+        page_count: PDF 总页数。
+        pdf_config: 可选的 PDF 页码配置覆盖，为 ``None`` 时从全局 ``settings.pdf`` 读取。
+    """
+    cfg = pdf_config or settings.pdf
+    front_start = max(1, cfg.front_start)
+    front_end = min(page_count, cfg.front_end)
+    back_start = max(1, page_count - cfg.back_start + 1)
+    back_end = max(1, page_count - cfg.back_end + 1)
 
     front = list(range(front_start, front_end + 1))
     back = list(range(back_start, back_end + 1))
@@ -292,12 +302,14 @@ class PdfExtractor:
         detector=None,
         *,
         filename: bool = False,
+        pdf_config: PDFConfig | None = None,
     ) -> ExtractResult:
         """从 PDF 中提取 ISBN。
 
         Args:
             pdf_path: PDF 文件路径.
             filename: 是否优先从文件名中提取 ISBN。
+            pdf_config: 可选的 PDF 页码配置覆盖，为 ``None`` 时从全局 ``settings.pdf`` 读取。
 
         Returns:
             ExtractResult — 包含 ISBN、定位信息、耗时等。
@@ -338,7 +350,7 @@ class PdfExtractor:
 
             # ── 2. 书签检测 + 候选页 ──
             bookmark_pages = _check_bookmarks(doc)  # list[int], 按优先级排序
-            candidates = _get_candidate_pages(page_count)
+            candidates = _get_candidate_pages(page_count, pdf_config=pdf_config)
             # 按优先级将书签页插入候选列表最前
             for page in reversed(bookmark_pages):
                 if page in candidates:

@@ -10,6 +10,32 @@ from isbnx.config import settings
 from isbnx.models import BookInfo
 
 
+def extract_from_stem(
+    stem: str,
+    strict: int | None = None,
+) -> BookInfo | None:
+    """从文件名主干（不含扩展名）中提取 ISBN 和 SSID。
+
+    与 :func:`extract_from_filename` 的区别是不做文件存在性检查，
+    适用于调用方已确认文件存在的场景（如批处理扫描后）。
+
+    Args:
+        stem: 文件名主干（不含路径和后缀）。
+        strict: 严格等级，见 ``BookInfo.is_valid()``。
+
+    Returns:
+        提取成功返回 ``BookInfo``，否则返回 None。
+    """
+    isbn = extract_isbn(stem) or None
+    ssid_raw = extract_ssid(stem)
+    ssid = str(ssid_raw) if ssid_raw is not None else None
+
+    info = BookInfo(isbn=isbn, ssid=ssid)
+    if info.is_valid(strict=strict if strict is not None else settings.strict):
+        return info
+    return None
+
+
 def extract_from_filename(
     path: str | Path,
     strict: int | None = None,
@@ -30,13 +56,4 @@ def extract_from_filename(
     p = Path(path)
     if not p.exists():
         return None
-
-    stem = p.stem
-    isbn = extract_isbn(stem) or None
-    ssid_raw = extract_ssid(stem)
-    ssid = str(ssid_raw) if ssid_raw is not None else None
-
-    info = BookInfo(isbn=isbn, ssid=ssid)
-    if info.is_valid(strict=strict if strict is not None else settings.strict):
-        return info
-    return None
+    return extract_from_stem(p.stem, strict=strict)

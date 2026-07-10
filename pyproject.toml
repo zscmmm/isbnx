@@ -19,6 +19,7 @@ dependencies = [
     "pyzbar>=0.1.9",
     "rapidocr>=3.9.0",
     "rarfile>=4.2",
+    "tqdm>=4.67.0",
 ]
 
 [dependency-groups]

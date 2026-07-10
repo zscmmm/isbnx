@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING
 from isbnx.utils.io import detect_file_kind
 
 if TYPE_CHECKING:
-    from isbnx.config import Settings
+    from isbnx.batch import BatchResult
+    from isbnx.config import PDFConfig, Settings
     from isbnx.detector import Detector
     from isbnx.models import ExtractResult
 
@@ -36,14 +37,20 @@ class ISBNX:
         config = Settings(strict=2)
         config.ocr.ocr_model = "medium"
         result = ISBNX(config=config).from_image("cover.png")
+
+        # 批量处理（复用当前实例的配置和引擎）
+        result = ISBNX().batch("D:/books", "D:/done", "D:/fail")
     """
 
     def __init__(self, config: Settings | None = None) -> None:
+        from threading import Lock
+
         from isbnx.config import settings
 
         self.config = config or settings
         self._apply_config()
         self._detector: Detector | None = None  # 懒加载，首次需要时再初始化
+        self._detector_lock = Lock()
 
     @property
     def detector(self) -> Detector:
@@ -51,7 +58,9 @@ class ISBNX:
         from isbnx.detector import get_detector
 
         if self._detector is None:
-            self._detector = get_detector()
+            with self._detector_lock:
+                if self._detector is None:
+                    self._detector = get_detector()
         return self._detector
 
     def _apply_config(self) -> None:
@@ -60,6 +69,99 @@ class ISBNX:
 
         if self.config is not settings:
             configure(**self.config.model_dump())
+
+    # ── 批量处理 ──
+
+    def batch(
+        self,
+        source_dir: str | Path,
+        success_dir: str | Path,
+        failed_dir: str | Path,
+        *,
+        exclude_dirs: set[str] | None = None,
+        max_workers: int | None = None,
+        recursive: bool = True,
+        rename_mode: int = 3,
+        pdf_front_start: int | None = None,
+        pdf_front_end: int | None = None,
+        pdf_back_start: int | None = None,
+        pdf_back_end: int | None = None,
+        skip_isbn: bool = True,
+        skip_ssid: bool = False,
+        normalize_ext: bool = True,
+        keep_name: bool = True,
+        quiet: bool = False,
+        show_progress: bool = True,
+        keep_tree: bool = False,
+        deduplicate: bool = False,
+        dedup_read_size: int = 4096,
+        max_name_len: int = 180,
+        report_path: str | Path | None = None,
+        dry_run: bool = False,
+    ) -> BatchResult:
+        """创建批量处理器，复用当前实例的配置和引擎。
+
+        Args:
+            source_dir: 待扫描的源目录。
+            success_dir: ISBN 提取成功的文件移动到此目录。
+            failed_dir: ISBN 提取失败的文件移动到此目录。
+            exclude_dirs: 要跳过的目录名集合，默认排除 ``.git``、``__pycache__`` 等。
+            max_workers: 并行线程数，默认 ``os.cpu_count() - 1``。
+            recursive: 是否递归扫描子目录，默认 ``True``。
+            rename_mode: 重命名模式 —
+                ``1``=末尾追加（旧标识不变），``2``=最前面追加（旧标识不变），
+                ``3``=替换旧标识再末尾追加（默认），``4``=替换旧标识再最前面追加。
+                模式 1/2 中文件名已有标识则不重复。
+            pdf_front_start: PDF 前部搜索起始页码偏移（默认 2）。
+            pdf_front_end: PDF 前部搜索结束页码偏移（默认 10）。
+            pdf_back_start: PDF 后部搜索起始页码偏移（默认 5）。
+            pdf_back_end: PDF 后部搜索结束页码偏移（默认 1）。
+            skip_isbn: 文件名有 ISBN 时跳过内容提取，默认 ``True``。
+            skip_ssid: 文件名有 SSID 时跳过内容提取，默认 ``False``。
+            normalize_ext: 统一后缀为小写（``.PDF`` → ``.pdf``），默认 ``True``。
+            keep_name: 保留原文件名书名部分（默认 ``True``），``False``=仅用 ISBN/SSID 命名。
+            quiet: 安静模式，不逐文件打印日志，默认 ``False``。
+            show_progress: 显示 tqdm 进度条，默认 ``True``。与 ``quiet`` 独立控制。
+            keep_tree: 保留源目录的子目录结构，默认 ``False``。
+            deduplicate: 对内容完全相同的文件去重，默认 ``False``。
+                启用后会先按大小和头部指纹初筛，再用完整哈希确认。
+            dedup_read_size: 去重读取文件头部的字节数，默认 ``4096``（4KB）。
+                ``0``=跳过头部初筛，同尺寸文件直接做完整哈希确认。
+            max_name_len: 文件名最大长度（含后缀），默认 ``180``。
+            report_path: 可选，保存 CSV 报告到此路径。
+            dry_run: 干运行（仅预览），不实际移动文件。
+
+        Returns:
+            :class:`~isbnx.batch.BatchResult` 处理结果统计。
+        """
+        from isbnx.batch import Batch
+
+        return Batch(
+            source_dir,
+            success_dir,
+            failed_dir,
+            exclude_dirs=exclude_dirs,
+            max_workers=max_workers,
+            recursive=recursive,
+            engine=self,
+            rename_mode=rename_mode,
+            pdf_front_start=pdf_front_start,
+            pdf_front_end=pdf_front_end,
+            pdf_back_start=pdf_back_start,
+            pdf_back_end=pdf_back_end,
+            skip_isbn=skip_isbn,
+            skip_ssid=skip_ssid,
+            normalize_ext=normalize_ext,
+            keep_name=keep_name,
+            quiet=quiet,
+            show_progress=show_progress,
+            keep_tree=keep_tree,
+            deduplicate=deduplicate,
+            dedup_read_size=dedup_read_size,
+            max_name_len=max_name_len,
+            report_path=report_path,
+            dry_run=dry_run,
+        ).run()
 
     # ── 单张图片 ──
 
@@ -96,6 +198,7 @@ class ISBNX:
                     bookinfo=info,
                     meta=Meta(source=str(path), source_type="image"),
                     elapsed=0.0,
+                    from_filename=True,
                 )
 
         if page != 1:
@@ -127,6 +230,7 @@ class ISBNX:
         page: int = 1,
         *,
         filename: bool = False,
+        pdf_config: PDFConfig | None = None,
     ) -> ExtractResult:
         """根据文件后缀自动选择对应的提取方法。
 
@@ -134,6 +238,7 @@ class ISBNX:
             path: 文件路径。
             page: 页码，仅对图片有效。
             filename: 是否优先从文件名中提取 ISBN。
+            pdf_config: 可选的 PDF 页码配置覆盖，为 ``None`` 时从全局 ``settings.pdf`` 读取。
 
         Returns:
             :class:`~isbnx.models.ExtractResult` 包含 ISBN 提取结果。
@@ -142,7 +247,7 @@ class ISBNX:
         if kind == "image":
             return self.from_image(path, page=page, filename=filename)
         if kind == "pdf":
-            return self.from_pdf(path, filename=filename)
+            return self.from_pdf(path, filename=filename, pdf_config=pdf_config)
         if kind == "epub":
             return self.from_epub(path, filename=filename)
         if kind == "mobi":
@@ -156,6 +261,7 @@ class ISBNX:
         path: str | Path,
         *,
         filename: bool = False,
+        pdf_config: PDFConfig | None = None,
     ) -> ExtractResult:
         """从 PDF 文件中提取 ISBN。
 
@@ -165,6 +271,7 @@ class ISBNX:
         Args:
             path: PDF 文件路径。
             filename: 是否优先从文件名中提取 ISBN。
+            pdf_config: 可选的 PDF 页码配置覆盖，为 ``None`` 时从全局 ``settings.pdf`` 读取。
 
         Returns:
             :class:`~isbnx.models.ExtractResult` 包含 ISBN 提取结果。
@@ -183,10 +290,11 @@ class ISBNX:
                     bookinfo=info,
                     meta=Meta(source=str(path), source_type="pdf"),
                     elapsed=0.0,
+                    from_filename=True,
                 )
         from isbnx.pdf import PdfExtractor
 
-        return PdfExtractor.extract(path, detector=self.detector)
+        return PdfExtractor.extract(path, detector=self.detector, pdf_config=pdf_config)
 
     # ── EPUB ──
 
@@ -222,6 +330,7 @@ class ISBNX:
                     bookinfo=info,
                     meta=Meta(source=str(path), source_type="epub"),
                     elapsed=0.0,
+                    from_filename=True,
                 )
         from isbnx.epub import EpubExtractor
 
@@ -257,6 +366,7 @@ class ISBNX:
                     bookinfo=info,
                     meta=Meta(source=str(path), source_type="mobi"),
                     elapsed=0.0,
+                    from_filename=True,
                 )
         from isbnx.mobi import MobiExtractor
 
@@ -304,6 +414,7 @@ class ISBNX:
                     bookinfo=info,
                     meta=Meta(source=str(path), source_type="archive"),
                     elapsed=0.0,
+                    from_filename=True,
                 )
         from isbnx.archive import ArchiveExtractor
 
@@ -343,6 +454,7 @@ def extract(
                 bookinfo=info,
                 meta=Meta(source=str(path), source_type=_kind),
                 elapsed=0.0,
+                from_filename=True,
             )
     from isbnx.isbnx import ISBNX
 

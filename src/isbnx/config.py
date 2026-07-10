@@ -20,7 +20,8 @@ class OCRConfig(BaseModel):
     Attributes:
         ocr_model: OCR 模型精度，``"small"``（快速，默认）或 ``"medium"``（高精度）。
         use_cls: 是否启用方向分类器。ISBN 文字始终水平，无需分类，关闭可省 ~100-300ms。
-        use_det: 是否启用文本检测（Det）阶段。YOLO 已定位到 ISBN 区域，可跳过检测。
+        use_det: 是否启用文本检测（Det）阶段。YOLO 已定位到 ISBN 区域并裁剪，
+            跳过检测可大幅提速；仅当裁剪框过松导致识别失败时需开启。
         det_limit_side_len: 检测模型输入图像短边缩放长度。
         max_input_dim: OCR 输入图片的最大边长（像素）。超过此值会等比例缩小。
         min_input_dim: OCR 输入图片的最小边长（像素）。低于此值会等比例放大。
@@ -28,7 +29,7 @@ class OCRConfig(BaseModel):
 
     ocr_model: Literal["small", "medium"] = "small"  # OCR 模型精度，small/medium
     use_cls: bool = False
-    use_det: bool = True  # 是否启用 RapidOCR 文本检测（Det）。建议开启, 除非class_id = 0
+    use_det: bool = True  # 是否启用 RapidOCR 文本检测（Det）。建议开启, 除非class_id = 0,开启会增加约 100-300ms 的耗时, 但可提高识别率
     det_limit_side_len: int = 320
     max_input_dim: int = 960  # OCR 输入图片的最大边长（像素）。超过此值会等比例缩小。
     min_input_dim: int = 300  # OCR 输入图片的最小边长（像素）。低于此值会等比例放大。
@@ -55,7 +56,9 @@ class DetectorConfig(BaseModel):
     input_width: int = 1280
     input_height: int = 1280
     letterbox_color: str = "114,114,114"
-    num_threads: int = 4
+    num_threads: int = 1
+    """ONNX 推理线程数。batch 多线程模式下每个 worker 有独立 ONNX session，
+    设为 1 可最大化并行度（每个 worker 只占 1 个 CPU 线程）。"""
 
     @field_validator("conf_threshold", "fallback_ratio")
     @classmethod
@@ -76,11 +79,14 @@ class PDFConfig(BaseModel):
     """PDF 页码定位配置。
 
     控制 ISBN 检测在 PDF 前页／后页的搜索范围（偏移量，1-indexed）。
+
+    ISBN 通常出现在版权页（第 2-4 页）或封底（最后 1-2 页），
+    缩小搜索范围可显著减少页面渲染和 OCR 耗时。
     """
 
     front_start: int = 2
-    front_end: int = 10
-    back_start: int = 5
+    front_end: int = 5  # 前部搜索到第 5 页（版权页区域，默认 10 缩减为 5）
+    back_start: int = 3  # 后部从倒数第 3 页开始（封底区域，默认 5 缩减为 3）
     back_end: int = 1
 
 

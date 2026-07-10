@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from isbnx.batch import Batch, BatchResult
     from isbnx.config import Settings, configure, settings
     from isbnx.isbnx import ISBNX, extract
     from isbnx.models import Detect, ExtractResult, Locate, Meta, OCRResult
@@ -18,6 +19,8 @@ __all__ = [
     "Meta",
     "OCRResult",
     "ExtractResult",
+    "Batch",
+    "BatchResult",
 ]
 
 
@@ -36,6 +39,8 @@ def __getattr__(name: str):
         "Meta": "isbnx.models",
         "OCRResult": "isbnx.models",
         "ExtractResult": "isbnx.models",
+        "Batch": "isbnx.batch",
+        "BatchResult": "isbnx.batch",
     }
     if name in _lazy_map:
         mod = importlib.import_module(_lazy_map[name])
