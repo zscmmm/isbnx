@@ -34,6 +34,7 @@ import re
 import shutil
 import threading
 import time
+from collections.abc import Callable, Iterable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -134,6 +135,18 @@ class BatchResult:
     dedup_enabled: bool = False
     duplicates: int = 0
     dedup_saved_bytes: int = 0
+
+    # ── 条目数限制 ──
+    max_entries: int = 0  # 0 表示不限制
+    entries_truncated: bool = False  # entries 是否被截断
+    total_entries: int = 0  # 实际总条目数（截断前），0 表示未截断
+
+    # ── 统一条目（前端直接使用，含分类标记） ──
+    entries: list[tuple[str, str, float, str]] = field(default_factory=list)
+
+    # ── 进度回调（由 Api 层设置，供前端轮询） ──
+    progress_callback: Callable[[int, int, str], None] | None = None
+    entries_callback: Callable[[str, str, float, str], None] | None = None
 
     # ── 异常 ──
     errors: list[tuple[Path, str]] = field(default_factory=list)
@@ -304,6 +317,10 @@ class Batch:
         failed_dir:
             ISBN 提取失败（无有效 ISBN/SSID）的文件移动到此目录。
 
+        extensions:
+            要处理的文件后缀集合（如 ``{".pdf", ".epub"}``）。
+            必须为 :data:`SUPPORTED_EXTENSIONS` 的子集。默认 ``None`` 表示处理所有 6 种支持的类型。
+
         exclude_dirs:
             要跳过的目录名集合，默认排除 ``.git``、``__pycache__``、``.venv`` 等常见目录。
             设为 ``set()`` 可不清洗任何目录。
@@ -336,6 +353,10 @@ class Batch:
             - ``4`` — **替换旧标识再最前面追加**：与模式 3 类似，但新标识插入在最前面。
 
             模式 1/2 中如果文件名已有标识则不重复添加。
+
+        extensions:
+            要处理的文件后缀集合（如 ``{{".pdf", ".epub"}}``）。
+            必须为 ``SUPPORTED_EXTENSIONS`` 的子集。默认 ``None`` 表示处理所有 6 种支持的类型。
 
         pdf_front_start/pdf_front_end:
             PDF **前部**搜索范围（页码偏移，1-indexed）。
@@ -405,6 +426,44 @@ class Batch:
             干运行模式，默认 ``False``。
             ``True`` 时仅打印日志预览操作，**不实际移动任何文件**。
             首次使用建议先 ``dry_run=True`` 确认效果。
+
+        shutdown_event:
+            可选的 ``threading.Event`` 对象，用于从外部优雅终止批量处理。
+            默认 ``None`` 表示不启用关闭机制。
+
+            用法：创建一个 ``threading.Event``，在需要取消时调用 ``event.set()``。
+            处理过程中会在文件名预检、线程池提交等关键节点检查此事件，
+            触发后立即停止新任务的提交，已提交正在执行的任务等待完成
+            （不强制中断线程），然后返回已处理的结果统计。
+
+        progress_callback:
+            可选的进度回调函数，格式 ``Callable[[int, int, str], None]``。
+            默认 ``None`` 表示不启用进度回调。
+
+            签名 ``(processed: int, total: int, filename: str) -> None``。
+            每处理完一个文件后调用，三个参数分别为：已处理文件数、总文件数、
+            当前文件名。可用于驱动进度条控件。
+
+        entries_callback:
+            可选的逐条结果回调函数，格式 ``Callable[[str, str, float, str], None]``。
+            默认 ``None`` 表示不启用逐条回调。
+
+            签名 ``(old_path: str, new_path: str, elapsed: float, outcome: str) -> None``。
+            每处理完一个文件后调用，四个参数分别为：原路径、新路径、耗时（秒）、
+            结果分类。可用于实时同步处理结果到外部系统（如数据库、UI 列表）。
+
+        max_entries:
+            ``result.entries`` 列表的最大条目数，默认 ``1000``。
+            设为 ``0`` 或负数表示不限制。
+            当处理大量文件时，限制 entries 大小可避免返回数据过大。
+            注意：此限制仅影响 ``entries`` 列表，不影响 ``paths_*`` 等详细路径列表。
+
+        remove_empty_dirs:
+            处理完成后是否删除源目录下的空目录，默认 ``False``。
+            启用后，从叶子到根自底向上扫描源目录树，
+            删除所有不包含任何文件（含子目录中文件）的空目录。
+            仅在 ``dry_run=False`` 时实际删除；干运行模式下仅打印日志。
+            注意：源目录本身即使变空也不会被删除。
     """
 
     def __init__(
@@ -413,6 +472,7 @@ class Batch:
         success_dir: str | Path,
         failed_dir: str | Path,
         *,
+        extensions: Iterable[str] | None = None,
         exclude_dirs: set[str] | None = None,
         max_workers: int | None = None,
         recursive: bool = True,
@@ -435,6 +495,11 @@ class Batch:
         max_name_len: int = 180,
         report_path: str | Path | None = None,
         dry_run: bool = False,
+        shutdown_event: threading.Event | None = None,
+        progress_callback: Callable[[int, int, str], None] | None = None,
+        entries_callback: Callable[[str, str, float, str], None] | None = None,
+        max_entries: int = 1000,
+        remove_empty_dirs: bool = False,
     ) -> None:
         # ── 参数校验 ──
         if rename_mode not in (1, 2, 3, 4):
@@ -445,13 +510,24 @@ class Batch:
             raise ValueError(f"dedup_read_size 不能为负数，收到 {dedup_read_size!r}")
         if max_name_len < 10:
             raise ValueError(f"max_name_len 至少为 10，收到 {max_name_len!r}")
+        if max_entries < 0:
+            raise ValueError(f"max_entries 不能为负数，收到 {max_entries!r}")
         if not source_dir:
             raise ValueError("source_dir 不能为空")
         if not success_dir:
             raise ValueError("success_dir 不能为空")
         if not failed_dir:
             raise ValueError("failed_dir 不能为空")
+        if extensions is not None:
+            ext_set = set(extensions)
+            invalid = ext_set - SUPPORTED_EXTENSIONS
+            if invalid:
+                raise ValueError(f"不支持的扩展名: {invalid}，仅支持: {sorted(SUPPORTED_EXTENSIONS)}")
+            self._extensions = frozenset(ext_set)
+        else:
+            self._extensions = SUPPORTED_EXTENSIONS
 
+        self.shutdown_event = shutdown_event
         self.source_dir = Path(source_dir)
         self.success_dir = Path(success_dir)
         self.failed_dir = Path(failed_dir)
@@ -464,6 +540,8 @@ class Batch:
         self.max_workers = max_workers if max_workers is not None else _default_workers()
         self.recursive = recursive
         self.dry_run = dry_run
+        self.progress_callback = progress_callback
+        self.entries_callback = entries_callback
         self.rename_mode = rename_mode
         self.skip_isbn = skip_isbn
         self.skip_ssid = skip_ssid
@@ -476,6 +554,8 @@ class Batch:
         self.dedup_read_size = dedup_read_size
         self.max_name_len = max_name_len
         self.report_path = Path(report_path) if report_path else None
+        self.max_entries = max_entries
+        self.remove_empty_dirs = remove_empty_dirs
         # 构造 PDF 配置覆盖（仅保留非 None 字段）
         pdf_overrides: dict[str, int] = {}
         if pdf_front_start is not None:
@@ -527,9 +607,12 @@ class Batch:
         elapsed: float,
         *,
         pbar: tqdm,
+        max_entries: int = 1000,
     ) -> None:
         """将单个文件的结果记录到 ``result`` 并更新进度条。"""
         record = (fp, dst, elapsed)
+        # 判断 entries 列表是否还能追加，同时累计总条目数
+        _can_add_entry = max_entries <= 0 or len(result.entries) < max_entries
         icons: dict[str, str] = {
             "isbn_skipped": "⏭",
             "ssid_skipped": "⏭",
@@ -545,24 +628,34 @@ class Batch:
             result.skipped += 1
             result.isbn_in_name += 1
             result.paths_skipped.append(record)
+            if _can_add_entry:
+                result.entries.append((str(fp), str(dst), elapsed, "isbn_skipped"))
         elif outcome == "ssid_skipped":
             result.skipped += 1
             result.ssid_skipped += 1
             result.paths_skipped.append(record)
+            if _can_add_entry:
+                result.entries.append((str(fp), str(dst), elapsed, "ssid_skipped"))
         elif outcome == "isbn_appended":
             result.success += 1
             result.isbn_count += 1
             result.paths_isbn.append(record)
+            if _can_add_entry:
+                result.entries.append((str(fp), str(dst), elapsed, "isbn_ok"))
             result.extract_elapsed_total += elapsed
         elif outcome == "ssid_appended":
             result.success += 1
             result.ssid_count += 1
             result.paths_ssid.append(record)
+            if _can_add_entry:
+                result.entries.append((str(fp), str(dst), elapsed, "ssid_ok"))
             result.extract_elapsed_total += elapsed
         elif outcome == "ssid_in_name":
             result.success += 1
             result.ssid_in_name += 1
             result.paths_ssid_name.append(record)
+            if _can_add_entry:
+                result.entries.append((str(fp), str(dst), elapsed, "ssid_name_ok"))
         elif outcome == "error_preview":
             result.failed += 1
             result.error_preview += 1
@@ -578,7 +671,21 @@ class Batch:
         else:  # "failed" 等
             result.failed += 1
             result.paths_failed.append(record)
+            if _can_add_entry:
+                result.entries.append((str(fp), str(dst), elapsed, "failed"))
             result.extract_elapsed_total += elapsed
+
+        # 进度回调
+        cb = result.progress_callback
+        if cb:
+            processed = result.skipped + result.success + result.failed
+            cb(processed, result.total, fp.name)
+
+        # 条目实时回调（增量同步）
+        ecb = result.entries_callback
+        if ecb and result.entries:
+            last = result.entries[-1]
+            ecb(last[0], last[1], last[2], last[3])
 
     # ── 公共入口 ──
 
@@ -589,6 +696,9 @@ class Batch:
             包含处理统计信息的 :class:`BatchResult`。
         """
         result = BatchResult()
+        result.max_entries = self.max_entries
+        result.progress_callback = self.progress_callback
+        result.entries_callback = self.entries_callback
         t0 = time.perf_counter()
         self._deleted_duplicates = []
         scanned = self._collect_files()
@@ -601,9 +711,10 @@ class Batch:
         if files:
             dup_info = f"(去重跳过 {result.duplicates} 个)" if self.deduplicate else ""
             msg = f"扫描到 {result.scanned_total} 个文件{dup_info}  使用 {self.max_workers} 线程"
-            logger.info(msg)
+            if not self.quiet:
+                logger.info(msg)
 
-            if self.dry_run:
+            if self.dry_run and not self.quiet:
                 logger.info("干运行模式 — 仅打印操作，不移动文件")
 
             # ── 预检文件名：跳过文件直接在主线程处理，仅待提取文件进线程池 ──
@@ -636,9 +747,14 @@ class Batch:
 
             # ── 跳过文件：主线程直接处理（轻量，不碰 ONNX） ──
             for fp in skip_files:
+                if self.shutdown_event and self.shutdown_event.is_set():
+                    logger.info("🛑 收到关闭信号，终止文件处理")
+                    remaining = len(skip_files) + len(extract_files) - pbar.n
+                    pbar.update(remaining)
+                    break
                 try:
                     outcome, dst, elapsed = self._process_single(fp)
-                    self._record_outcome(result, fp, outcome, dst, elapsed, pbar=pbar)
+                    self._record_outcome(result, fp, outcome, dst, elapsed, pbar=pbar, max_entries=self.max_entries)
                 except Exception as e:
                     result.errors.append((fp, str(e)))
                     result.failed += 1
@@ -650,6 +766,13 @@ class Batch:
             # ── 待提取文件：提交到线程池并行处理 ──
             # 注意：settings.detector.num_threads 设为 1 时 ONNX 单线程推理，
             # 每个 worker 仅用 1 个 CPU，可与 worker 数成正比扩展，避免超订。
+            if self.shutdown_event and self.shutdown_event.is_set():
+                pbar.close()
+                result.elapsed = time.perf_counter() - t0
+                self._log_summary(result)
+                self._save_report(result)
+                return result
+
             if extract_files:
                 extract_iter = iter(extract_files)
                 submitted = 0
@@ -660,18 +783,29 @@ class Batch:
                     pending: dict[Future, Path] = {}
 
                     while submitted < total_extract or pending:
+                        # 检查关闭信号
+                        if self.shutdown_event and self.shutdown_event.is_set():
+                            logger.info("🛑 收到关闭信号，终止文件处理")
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            pending.clear()
+                            remaining = total_files - pbar.n
+                            pbar.update(remaining)
+                            break
+
                         while submitted < total_extract and len(pending) < max_pending:
                             fp = next(extract_iter)
                             fut = executor.submit(self._process_single, fp)
                             pending[fut] = fp
                             submitted += 1
 
-                        done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                        done, _ = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
                         for future in done:
                             fp = pending.pop(future)
                             try:
                                 outcome, dst, elapsed = future.result()
-                                self._record_outcome(result, fp, outcome, dst, elapsed, pbar=pbar)
+                                self._record_outcome(
+                                    result, fp, outcome, dst, elapsed, pbar=pbar, max_entries=self.max_entries
+                                )
                             except Exception as e:
                                 result.errors.append((fp, str(e)))
                                 result.failed += 1
@@ -682,13 +816,34 @@ class Batch:
 
             pbar.close()
 
+        # ── 空目录清理 ──
+        if self.remove_empty_dirs:
+            empty_removed = self._remove_empty_dirs()
+            if empty_removed and not self.quiet and not self.dry_run:
+                logger.info(f"🗑 共删除 {empty_removed} 个空目录")
+            elif empty_removed and not self.quiet and self.dry_run:
+                logger.info(f"[DRY] 共 {empty_removed} 个空目录将被删除")
+
         # ── 记录去重文件 ──
         for dup_path, dup_size in self._deleted_duplicates:
             result.paths_duplicates.append((dup_path, f"{dup_size} bytes"))
             result.dedup_saved_bytes += dup_size
         if self._deleted_duplicates:
             savebytes = BatchResult._format_size(result.dedup_saved_bytes)
-            logger.info(f"🔁 删除 {len(self._deleted_duplicates)} 个重复文件，节省 {savebytes}")
+            if not self.quiet:
+                logger.info(f"🔁 删除 {len(self._deleted_duplicates)} 个重复文件，节省 {savebytes}")
+
+        # ── 标记截断状态 ──
+        # 实际应产生 entries 的文件总数（error_preview/error 不产生 entry）
+        result.total_entries = (
+            result.skipped
+            + result.success
+            + result.failed
+            - result.error_preview
+            - result.error_moved
+            - result.error_unmoved
+        )
+        result.entries_truncated = result.max_entries > 0 and result.total_entries > result.max_entries
 
         result.elapsed = time.perf_counter() - t0
         self._log_summary(result)
@@ -728,7 +883,7 @@ class Batch:
                                     stack.append(Path(entry.path))
                             elif entry.is_file(follow_symlinks=False):
                                 ext = os.path.splitext(entry.name)[1].lower()
-                                if ext in SUPPORTED_EXTENSIONS:
+                                if ext in self._extensions:
                                     files.append(Path(entry.path))
                         except OSError:
                             continue
@@ -747,7 +902,7 @@ class Batch:
         else:
             files = []
             for entry in self.source_dir.iterdir():
-                if entry.suffix.lower() in SUPPORTED_EXTENSIONS and entry.is_file():
+                if entry.suffix.lower() in self._extensions and entry.is_file():
                     files.append(entry)
 
         # 按路径排序保证确定性
@@ -841,7 +996,7 @@ class Batch:
                     if full_h in seen:
                         if not self.dry_run:
                             fp.unlink()
-                        else:
+                        elif not self.quiet:
                             logger.info(f"[DRY] 去重: {fp}")
                         self._deleted_duplicates.append((fp, sz))
                     else:
@@ -865,6 +1020,35 @@ class Batch:
             return dst
 
         return dst.parent / parent / dst.name
+
+    # ── 空目录清理 ──
+
+    def _remove_empty_dirs(self) -> int:
+        """自底向上扫描源目录树，删除所有空目录。
+
+        Returns:
+            删除的空目录数量。
+        """
+        removed = 0
+        # topdown=False: 先处理叶子节点，再处理父目录
+        for dirpath, _dirnames, _filenames in os.walk(self.source_dir, topdown=False):
+            p = Path(dirpath)
+            # 跳过排除目录和源根目录
+            if p.name in self.exclude_dirs or p == self.source_dir:
+                continue
+            try:
+                if not any(p.iterdir()):
+                    if self.dry_run:
+                        if not self.quiet:
+                            logger.info(f"[DRY] 删除空目录: {p}")
+                    else:
+                        p.rmdir()
+                        if not self.quiet:
+                            logger.info(f"🗑 删除空目录: {p}")
+                    removed += 1
+            except OSError:
+                continue
+        return removed
 
     # ── 线程局部引擎 ──
 
@@ -971,7 +1155,8 @@ class Batch:
             failed_name = self._failed_dst(file_path, self.failed_dir, normalize_ext=self.normalize_ext)
             dst = self._finalize_dst(failed_name, file_path)
             if self.dry_run:
-                logger.info(f"[DRY] 异常文件: {file_path} → {dst}")
+                if not self.quiet:
+                    logger.info(f"[DRY] 异常文件: {file_path} → {dst}")
                 return ("error_preview", dst, 0.0)
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst = self._move_file_with_conflict(file_path, dst)
@@ -1001,7 +1186,7 @@ class Batch:
     ) -> Path:
         """根据 rename_mode 构建目标路径。"""
         stem = src.stem
-        suffix = src.suffix
+        suffix = src.suffix.lower() if self.normalize_ext else src.suffix
         mode = self.rename_mode
 
         # 确定要追加的标识
@@ -1018,7 +1203,7 @@ class Batch:
             tag = filename_info.ssid
             tag_type = "ssid"
         else:
-            return self.success_dir / src.name
+            return self.success_dir / (src.stem + suffix)
 
         # ── 不保留原文件名，仅用标识命名 ──
         if not self.keep_name:
@@ -1054,28 +1239,32 @@ class Batch:
             # 末尾追加，旧标识不变。文件名已有则不重复
             if not (old_tag and tag in stem):
                 stem = f"{stem}_{tag}"
+            stem = stem.strip("_ ")
 
         elif mode == 2:
             # 最前面追加，旧标识不变。文件名已有则不重复
             if not (old_tag and tag in stem):
                 stem = f"{tag}_{stem}"
+            stem = stem.strip("_ ")
 
         elif mode == 3:
             # 替换旧标识，再末尾追加
             if old_tag:
                 stem = stem.replace(old_tag, "_")
             stem = self._clean_stem(stem)
-            stem = f"{stem}_{tag}"
+            stem = f"{stem}_{tag}".strip("_ ")
 
         elif mode == 4:
             # 替换旧标识，再最前面追加
             if old_tag:
                 stem = stem.replace(old_tag, "_")
             stem = self._clean_stem(stem)
-            stem = f"{tag}_{stem}"
+            stem = f"{tag}_{stem}".strip("_ ")
 
         else:
-            return self.success_dir / src.name
+            stem = self._clean_stem(stem)
+            stem = stem.strip("_ ")
+            return self.success_dir / (stem + suffix)
 
         new_name = self._truncate_name(stem, suffix)
         return self.success_dir / new_name
@@ -1158,8 +1347,10 @@ class Batch:
             w = csv.DictWriter(f, fieldnames=fieldnames)
             w.writeheader()
             w.writerows(rows)
-        logger.info(f"📄 报告已保存: {self.report_path}")
+        if not self.quiet:
+            logger.info(f"📄 报告已保存: {self.report_path}")
 
     def _log_summary(self, result: BatchResult) -> None:
         """输出处理摘要。"""
-        logger.info("处理完成  |  " + "  |  ".join(result.summary_parts()))
+        if not self.quiet:
+            logger.info("处理完成  |  " + "  |  ".join(result.summary_parts()))

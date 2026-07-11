@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -78,6 +80,7 @@ class ISBNX:
         success_dir: str | Path,
         failed_dir: str | Path,
         *,
+        extensions: Iterable[str] | None = None,
         exclude_dirs: set[str] | None = None,
         max_workers: int | None = None,
         recursive: bool = True,
@@ -90,14 +93,19 @@ class ISBNX:
         skip_ssid: bool = False,
         normalize_ext: bool = True,
         keep_name: bool = True,
-        quiet: bool = False,
-        show_progress: bool = True,
+        quiet: bool = True,
+        show_progress: bool = False,
         keep_tree: bool = False,
         deduplicate: bool = False,
         dedup_read_size: int = 4096,
         max_name_len: int = 180,
         report_path: str | Path | None = None,
         dry_run: bool = False,
+        shutdown_event: threading.Event | None = None,
+        progress_callback: Callable[[int, int, str], None] | None = None,
+        entries_callback: Callable[[str, str, float, str], None] | None = None,
+        max_entries: int = 1000,
+        remove_empty_dirs: bool = False,
     ) -> BatchResult:
         """创建批量处理器，复用当前实例的配置和引擎。
 
@@ -105,6 +113,8 @@ class ISBNX:
             source_dir: 待扫描的源目录。
             success_dir: ISBN 提取成功的文件移动到此目录。
             failed_dir: ISBN 提取失败的文件移动到此目录。
+            extensions: 要处理的文件后缀集合（如 ``{".pdf", ".epub"}``），
+                必须为 ``SUPPORTED_EXTENSIONS`` 的子集，默认 ``None``=处理所有支持的类型。
             exclude_dirs: 要跳过的目录名集合，默认排除 ``.git``、``__pycache__`` 等。
             max_workers: 并行线程数，默认 ``os.cpu_count() - 1``。
             recursive: 是否递归扫描子目录，默认 ``True``。
@@ -130,6 +140,72 @@ class ISBNX:
             max_name_len: 文件名最大长度（含后缀），默认 ``180``。
             report_path: 可选，保存 CSV 报告到此路径。
             dry_run: 干运行（仅预览），不实际移动文件。
+            shutdown_event:
+                可选的 ``threading.Event`` 对象，用于从外部优雅终止批量处理。
+                默认 ``None`` 表示不启用关闭机制。
+
+                用法：创建一个 ``threading.Event``，在需要取消时调用 ``event.set()``。
+                处理过程中会在文件名预检、线程池提交等关键节点检查此事件，
+                触发后立即停止新任务的提交，已提交正在执行的任务等待完成
+                （不强制中断线程），然后返回已处理的结果统计。
+
+                典型场景 — GUI 取消按钮或服务关闭钩子::
+
+                    import threading
+
+                    cancel_event = threading.Event()
+
+
+                    # 另开线程执行批量处理
+                    def run():
+                        result = ISBNX().batch("src", "ok", "fail", shutdown_event=cancel_event)
+
+
+                    # 用户点击取消时
+                    cancel_event.set()
+
+            progress_callback:
+                可选的进度回调函数，格式 ``Callable[[int, int, str], None]``。
+                默认 ``None`` 表示不启用进度回调。
+
+                签名 ``(processed: int, total: int, filename: str) -> None``。
+                每处理完一个文件后调用，三个参数分别为：已处理文件数、总文件数、
+                当前文件名。可用于驱动进度条控件。
+
+                传值示例::
+
+                    def on_progress(processed: int, total: int, name: str) -> None:
+                        print(f"[{processed}/{total}] {name}")
+
+
+                    ISBNX().batch("src", "ok", "fail", progress_callback=on_progress)
+
+            entries_callback:
+                可选的逐条结果回调函数，格式 ``Callable[[str, str, float, str], None]``。
+                默认 ``None`` 表示不启用逐条回调。
+
+                签名 ``(old_path: str, new_path: str, elapsed: float, outcome: str) -> None``。
+                每处理完一个文件后调用，四个参数分别为：原路径、新路径、耗时（秒）、
+                结果分类（如 ``"isbn_appended"`` / ``"failed"`` / …）。
+                可用于实时同步处理结果到外部系统（如数据库、UI 列表）。
+
+                传值示例::
+
+                    def on_entry(old: str, new: str, elapsed: float, outcome: str) -> None:
+                        print(f"{outcome}: {old} → {new} ({elapsed:.2f}s)")
+
+
+                    ISBNX().batch("src", "ok", "fail", entries_callback=on_entry)
+
+            max_entries:
+                ``result.entries`` 列表的最大条目数，默认 ``1000``。
+                设为 ``0`` 或负数表示不限制。
+                当处理大量文件时，限制 entries 大小可避免返回数据过大。
+
+            remove_empty_dirs:
+                处理完成后是否删除源目录下的空目录，默认 ``False``。
+                自底向上扫描，删除所有不含任何文件的空目录。
+                仅 ``dry_run=False`` 时实际删除，干运行模式下仅打印日志。
 
         Returns:
             :class:`~isbnx.batch.BatchResult` 处理结果统计。
@@ -140,6 +216,7 @@ class ISBNX:
             source_dir,
             success_dir,
             failed_dir,
+            extensions=extensions,
             exclude_dirs=exclude_dirs,
             max_workers=max_workers,
             recursive=recursive,
@@ -161,6 +238,11 @@ class ISBNX:
             max_name_len=max_name_len,
             report_path=report_path,
             dry_run=dry_run,
+            shutdown_event=shutdown_event,
+            progress_callback=progress_callback,
+            entries_callback=entries_callback,
+            max_entries=max_entries,
+            remove_empty_dirs=remove_empty_dirs,
         ).run()
 
     # ── 单张图片 ──

@@ -1,6 +1,6 @@
 [project]
 name = "isbnx"
-version = "0.0.5"
+version = "0.0.10"
 description = "从 PDF、图片、压缩包和 EPUB 文件中提取 ISBN 号，支持 ONNX 检测和 OCR 识别"
 readme = "README.md"
 authors = [
@@ -8,7 +8,7 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "cfunbook>=0.1.17",
+    "cfunbook>=0.1.18",
     "loguru>=0.7.3",
     "mneia-isbn>=0.0.3",
     "onnxruntime>=1.27.0",
@@ -31,7 +31,6 @@ dev = [
     "mkdocs-material>=9.6.12,<10.0",
     "mkdocstrings[python]>=0.29.1,<1.0",
     "pytest>=8.3.5",
-    "ruff>=0.15.20",
     "pre-commit>=4.6.0",
     "pandas>=3.0.3",
 ]
