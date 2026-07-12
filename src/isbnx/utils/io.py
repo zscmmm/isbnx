@@ -14,7 +14,7 @@ _IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".pdg")
 _PDF_SUFFIXES = (".pdf",)
 _EPUB_SUFFIXES = (".epub",)
 _MOBI_SUFFIXES = (".mobi",)
-_ARCHIVE_SUFFIXES = (".zip", ".rar", ".uvz")
+_ARCHIVE_SUFFIXES = (".zip", ".rar", ".uvz", ".7z")
 
 
 def require_suffix(path: str | Path, suffixes: tuple[str, ...], kind: str) -> Path:
@@ -52,7 +52,7 @@ def detect_file_kind(path: str | Path) -> ExtractKind:
         return "mobi"
     if ext in _ARCHIVE_SUFFIXES:
         return "archive"
-    raise ValueError(f"不支持的文件格式: {ext or '无后缀'}（支持图片/pdf/epub/mobi/zip/rar/uvz）")
+    raise ValueError(f"不支持的文件格式: {ext or '无后缀'}（支持图片/pdf/epub/mobi/zip/rar/7z/uvz）")
 
 
 def load_image(img: str | Image.Image | MatLike | Path | bytes) -> Image.Image:

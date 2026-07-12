@@ -84,6 +84,7 @@ SUPPORTED_EXTENSIONS: frozenset[str] = frozenset({
     ".zip",
     ".rar",
     ".uvz",
+    ".7z",
 })
 """支持 ISBN 提取的文件后缀集合。"""
 

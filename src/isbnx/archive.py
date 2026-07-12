@@ -343,6 +343,60 @@ class _RarReader(_ArchiveReader):
         self._rf.close()
 
 
+class _SevenZipReader(_ArchiveReader):
+    """7z 读取器。
+
+    注意：py7zr 没有提供直接读取文件内容的接口，
+    因此 ``read()`` 会将目标文件解压到临时目录后再读入内存。
+
+    另外，py7zr 的同一个 ``SevenZipFile`` 实例上多次调用 ``extract()``
+    会出现 CrcError（内部解压状态污染），所以每次 ``read()`` 都会
+    打开一个新的 ``SevenZipFile`` 实例。
+    """
+
+    def __init__(self, path: str) -> None:
+        import tempfile  # noqa: PLC0415
+
+        import py7zr  # noqa: PLC0415
+
+        self._path = path
+        self._sz = py7zr.SevenZipFile(path, mode="r")
+        self._tmpdir = tempfile.mkdtemp(prefix="isbnx_7z_")
+
+    def namelist(self) -> list[str]:
+        return self._sz.getnames()
+
+    def read(self, name: str) -> bytes:
+        from pathlib import Path  # noqa: PLC0415
+
+        import py7zr  # noqa: PLC0415
+
+        # 每次 read 都开新实例，避免 py7zr 多次 extract 的 CrcError
+        with py7zr.SevenZipFile(self._path, mode="r") as sz:
+            sz.extract(path=self._tmpdir, targets=[name])
+        target = Path(self._tmpdir) / name
+        if not target.exists():
+            raise KeyError(name)
+        return target.read_bytes()
+
+    def getinfo(self, name: str):
+        return self._sz.getinfo(name)
+
+    def is_encrypted(self) -> bool:
+        try:
+            return bool(self._sz.needs_password())
+        except Exception:
+            return False
+
+    def close(self) -> None:
+        import shutil  # noqa: PLC0415
+
+        try:
+            self._sz.close()
+        finally:
+            shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+
 def _open_archive(path: Path) -> _ArchiveReader:
     """根据文件扩展名打开压缩包。"""
     ext = path.suffix.lower()
@@ -350,7 +404,9 @@ def _open_archive(path: Path) -> _ArchiveReader:
         return _ZipReader(str(path))
     if ext == ".rar":
         return _RarReader(str(path))
-    raise ValueError(f"不支持的压缩包格式: {ext}（支持 zip/rar/uvz）")
+    if ext == ".7z":
+        return _SevenZipReader(str(path))
+    raise ValueError(f"不支持的压缩包格式: {ext}（支持 zip/rar/7z/uvz）")
 
 
 def _get_info_ignore_case(arc: _ArchiveReader, names: set[str], target: str):

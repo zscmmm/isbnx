@@ -462,7 +462,7 @@ class ISBNX:
         *,
         filename: bool = False,
     ) -> ExtractResult:
-        """从压缩包（zip/uvz）中提取 ISBN。
+        """从压缩包（zip/rar/7z/uvz）中提取 ISBN。
 
         数据来源优先级（按速度降序）：
 
@@ -484,7 +484,7 @@ class ISBNX:
         """
         from isbnx.utils.io import require_suffix
 
-        require_suffix(path, (".zip", ".rar", ".uvz"), "压缩包")
+        require_suffix(path, (".zip", ".rar", ".uvz", ".7z"), "压缩包")
         if filename:
             from isbnx.utils.filename import extract_from_filename
 
