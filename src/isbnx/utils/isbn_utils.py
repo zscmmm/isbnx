@@ -67,7 +67,10 @@ def is_valid_isbn(cleaned: str) -> bool:
         # ISBN-13 必须以 978/979 开头（全球标准前缀）
         if len(cleaned) == 13 and not cleaned.startswith(("978", "979")):
             return False
-        # ISBN-10 必须以 7 开头（中国组号），排除 CIP 号、外国 ISBN、hash 等
+        # ISBN-10 必须以 7 开头（中国组号）。
+        # 本项目仅面向中国大陆出版书籍，组号 7 对应中国。
+        # 其他组号（如 0/1=英语区、2=法语区、3=德语区、4=日本等）会被拒绝。
+        # 如需支持外国书籍，移除此限制即可。
         if len(cleaned) == 10 and not cleaned.startswith("7"):
             return False
         return _ISBN(cleaned).is_valid
