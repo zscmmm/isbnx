@@ -6,20 +6,28 @@ import re
 import time
 import zipfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from isbnx.models import BookInfo, ExtractResult, Meta
-from isbnx.utils.filename import extract_from_filename
+from isbnx.config import settings
+from isbnx.models import ExtractResult
+from isbnx.utils.isbn_utils import BYTE_GATE, decode_bytes, extract_isbn
+
+if TYPE_CHECKING:
+    from isbnx.config import Settings
+    from isbnx.detector import Detector
 
 
 class EpubExtractor:
-    """EPUB ISBN 提取器。"""
+    """EPUB ISBN 提取器。
 
-    # ── 字节级预过滤 ──
-    _BYTE_GATE = re.compile(rb"isbn|97[89][\d\- Xx]{10,}", re.IGNORECASE)
+    提取策略按优先级：
 
-    # ── 文本扫描正则 ──
-    _RE_ISBN_LABEL = re.compile(r"(?:ISBN(?:-1[03])?|isbn)[：:\s=]*([\dXx\- －—–]{10,})", re.IGNORECASE)
-    _RE_ISBN_978 = re.compile(r"\b(97[89][\dXx\- －—–]{9,})\b")
+    1. **OPF 元数据** — 解析 ``container.xml`` 定位 OPF，扫描 ``<dc:identifier>`` 等字段
+    2. **XHTML 内容** — 版权页文件优先，扫描全文搜索 ISBN
+    3. **封面/版权页图片** — 文件名以 ``cov``/``leg`` 开头的图片，ONNX 检测 + OCR
+
+    纯文本扫描（无 OCR），通常 1-10ms 即可完成。
+    """
 
     _TEXT_EXTS = (".opf", ".xhtml", ".html", ".htm", ".xml")
     _MAX_BYTES = 10 * 1024 * 1024
@@ -55,21 +63,30 @@ class EpubExtractor:
         cls,
         epub_path: str | Path,
         *,
+        detector: Detector | None = None,
         filename: bool = False,
+        config: Settings | None = None,
     ) -> ExtractResult:
+        """从 EPUB 文件中提取 ISBN。
+
+        优先解析 OPF 元数据，未命中时扫描 XHTML 文件内容，
+        最后尝试封面/版权页图片的 ONNX 检测 + OCR。
+
+        Args:
+            epub_path: EPUB 文件路径。
+            detector: 外部传入的 Detector 实例，为 ``None`` 时使用全局单例。
+                仅当需要 ONNX 图片检测时才使用。
+            filename: 是否优先从文件名中提取 ISBN。
+            config: 可选的完整配置对象，为 ``None`` 时从全局 ``settings`` 读取。
+
+        Returns:
+            :class:`~isbnx.models.ExtractResult` 包含 ISBN 提取结果。
+        """
         t0 = time.perf_counter()
         epub_path = Path(epub_path)
+        _cfg = config or settings
         if not epub_path.exists():
-            return cls._fail(str(epub_path), t0, "EPUB 文件不存在")
-
-        if filename:
-            info = extract_from_filename(epub_path)
-            if info:
-                return ExtractResult(
-                    bookinfo=info,
-                    meta=Meta(source=str(epub_path), source_type="epub"),
-                    elapsed=0.0,
-                )
+            return ExtractResult.fail(str(epub_path), "epub", "EPUB 文件不存在", t0, strict=_cfg.strict)
 
         try:
             with zipfile.ZipFile(epub_path, "r") as zf:
@@ -78,23 +95,23 @@ class EpubExtractor:
                 if opf:
                     isbn = cls._read_and_scan(zf, opf)
                     if isbn:
-                        return cls._ok(str(epub_path), t0, isbn)
+                        return ExtractResult.ok(str(epub_path), "epub", isbn, t0, strict=_cfg.strict)
 
                 # 2. XHTML/HTML（版权页优先，限制总数）──
                 files = cls._list_text_files(zf, skip=opf)
                 for name in files:
                     isbn = cls._read_and_scan(zf, name)
                     if isbn:
-                        return cls._ok(str(epub_path), t0, isbn)
+                        return ExtractResult.ok(str(epub_path), "epub", isbn, t0, strict=_cfg.strict)
 
                 # 3. 封面/版权页图片（文件名以 cov/leg 开头）──
-                result = cls._scan_images(zf, str(epub_path), t0)
+                result = cls._scan_images(zf, str(epub_path), t0, detector=detector)
                 if result:
                     return result
 
-            return cls._fail(str(epub_path), t0, "未找到有效 ISBN")
-        except Exception as e:
-            return cls._fail(str(epub_path), t0, f"EPUB 异常: {e}")
+            return ExtractResult.fail(str(epub_path), "epub", "未找到有效 ISBN", t0, strict=_cfg.strict)
+        except (OSError, zipfile.BadZipFile, RuntimeError) as e:
+            return ExtractResult.fail(str(epub_path), "epub", f"EPUB 异常: {e}", t0, strict=_cfg.strict)
 
     # ═════════════════════════════════════════════════════
     #  文件列表（版权页优先）
@@ -129,32 +146,22 @@ class EpubExtractor:
             if info.file_size > cls._MAX_BYTES:
                 return None
             raw = zf.read(name)
-        except Exception:
+        except (KeyError, OSError, zipfile.BadZipFile):
             return None
 
-        if not cls._BYTE_GATE.search(raw):
+        if not BYTE_GATE.search(raw):
             return None
 
-        return cls._scan(cls._decode(raw))
-
-    @classmethod
-    def _scan(cls, text: str) -> str | None:
-        for m in cls._RE_ISBN_LABEL.finditer(text):
-            v = cls._validate(cls._clean(m.group(1)))
-            if v:
-                return v
-        for m in cls._RE_ISBN_978.finditer(text):
-            v = cls._validate(cls._clean(m.group(1)))
-            if v:
-                return v
-        return None
+        return extract_isbn(decode_bytes(raw))
 
     # ═════════════════════════════════════════════════════
     #  图片扫描（cov/leg 开头图片 → ONNX 检测 + OCR）
     # ═════════════════════════════════════════════════════
 
     @classmethod
-    def _scan_images(cls, zf: zipfile.ZipFile, source: str, t0: float) -> ExtractResult | None:
+    def _scan_images(
+        cls, zf: zipfile.ZipFile, source: str, t0: float, *, detector: Detector | None = None
+    ) -> ExtractResult | None:
         """扫描 EPUB 中文件名以 cov/leg 开头的图片，通过 ONNX 检测 + OCR 提取 ISBN。"""
         # 收集符合条件的图片，cov 优先于 leg
         cov: list[str] = []
@@ -174,12 +181,12 @@ class EpubExtractor:
         from isbnx.detector import get_detector
         from isbnx.utils.io import load_image
 
-        detector = get_detector()
+        det = detector or get_detector()
         for name in image_names:
             try:
                 raw = zf.read(name)
                 img = load_image(raw)
-                result = detector.process(
+                result = det.process(
                     img,
                     source=f"{source}!{name}",
                     source_type="epub",
@@ -187,7 +194,7 @@ class EpubExtractor:
                 if result.success:
                     result.elapsed = time.perf_counter() - t0
                     return result
-            except Exception:
+            except (KeyError, OSError):
                 continue
         return None
 
@@ -201,53 +208,7 @@ class EpubExtractor:
             data = zf.read("META-INF/container.xml")
             m = re.search(rb'full-path\s*=\s*"([^"]+)"', data)
             if m:
-                return m.group(1).decode("ascii")
-        except Exception:
+                return m.group(1).decode("utf-8")
+        except (KeyError, OSError):
             pass
         return None
-
-    # ═════════════════════════════════════════════════════
-    #  helpers
-    # ═════════════════════════════════════════════════════
-
-    @staticmethod
-    def _clean(raw: str) -> str:
-        return re.sub(r"[^0-9Xx]", "", raw).upper()
-
-    @staticmethod
-    def _validate(candidate: str) -> str | None:
-        if len(candidate) not in (10, 13):
-            return None
-        try:
-            from mneia_isbn import ISBN as _ISBN
-
-            obj = _ISBN(candidate)
-            return str(obj.as_isbn13) if obj.is_valid else None
-        except Exception:
-            return None
-
-    @staticmethod
-    def _decode(data: bytes) -> str:
-        for enc in ("utf-8", "utf-16-le", "gb18030", "big5"):
-            try:
-                return data.decode(enc)
-            except (UnicodeDecodeError, UnicodeError):
-                continue
-        return data.decode("utf-8", errors="ignore")
-
-    @staticmethod
-    def _ok(source: str, t0: float, isbn: str) -> ExtractResult:
-        return ExtractResult(
-            bookinfo=BookInfo(isbn=isbn),
-            meta=Meta(source=source, source_type="epub"),
-            elapsed=time.perf_counter() - t0,
-        )
-
-    @staticmethod
-    def _fail(source: str, t0: float, msg: str) -> ExtractResult:
-        return ExtractResult(
-            bookinfo=BookInfo(),
-            meta=Meta(source=source, source_type="epub"),
-            error=msg,
-            elapsed=time.perf_counter() - t0,
-        )

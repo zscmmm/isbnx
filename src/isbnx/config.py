@@ -4,11 +4,11 @@ from typing import Any, Literal
 
 from loguru import logger
 from pydantic import BaseModel, field_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # ── 类型别名 ──
 OCREngine = Literal["rapidocr"]
-SourceType = Literal["pdf", "image", "archive", "epub"]
+SourceType = Literal["pdf", "image", "archive", "epub", "mobi"]
 
 # ── 全局常量 ──
 CORE_FIELDS = ("isbn",)
@@ -91,7 +91,13 @@ class PDFConfig(BaseModel):
 
 
 class ArchiveConfig(BaseModel):
-    """压缩包（PDG）提取配置。"""
+    """压缩包（PDG）提取配置。
+
+    Attributes:
+        pdg_min_count: PDG 数量阈值，压缩包中 PDG 文件数低于此值时直接跳过。
+        pdg_fallback_count: 兜底扫描数量，无 bookinfo.dat/leg001.pdg 时尝试前 N 个 PDG。
+        pdgview_path: PdgView.dll 的包内相对路径，用于解码 PDG 文件。
+    """
 
     pdg_min_count: int = 30
     """PDG 数量阈值：超过此值才触发 ISBN 提取。"""
@@ -103,7 +109,20 @@ class ArchiveConfig(BaseModel):
 
 
 class Settings(BaseSettings):
-    """全局配置"""
+    """全局配置，聚合所有子配置项。
+
+    通过 ``ISBNX(config=...)`` 传入自定义配置，或通过 :func:`configure` 运行时修改。
+
+    Attributes:
+        ocr: OCR 引擎配置。
+        detector: ONNX 检测器配置。
+        pdf: PDF 页码搜索范围配置。
+        archive: 压缩包（PDG）提取配置。
+        strict: 提取结果校验严格等级（1/2/3），值越小越严格。
+        log_level: 日志等级，默认 ``"INFO"``。
+    """
+
+    model_config = SettingsConfigDict(env_prefix="ISBNX_")
 
     # ── 子配置 ──
     ocr: OCRConfig = OCRConfig()
@@ -132,6 +151,20 @@ def configure(**kwargs: Any) -> None:
 
     只修改内存中的 settings 对象，不会写入文件。
     支持嵌套配置（自动识别 BaseModel 子字段并逐项更新）。
+
+    Args:
+        **kwargs: 配置项键值对。顶层键为 ``Settings`` 的属性名
+            （如 ``strict``、``log_level``），值可以是：
+
+            - 普通值 — 直接赋值（如 ``strict=2``）
+            - ``dict`` — 自动合并到对应子配置（如 ``ocr={"ocr_model": "medium"}``）
+            - ``BaseModel`` 实例 — 直接替换整个子配置
+
+    Example::
+
+        configure(strict=2)
+        configure(ocr={"ocr_model": "medium", "use_cls": True})
+        configure(detector=DetectorConfig(conf_threshold=0.5))
     """
     for key, value in kwargs.items():
         if not hasattr(settings, key):
@@ -140,12 +173,11 @@ def configure(**kwargs: Any) -> None:
 
         target = getattr(settings, key)
         if isinstance(target, BaseModel) and isinstance(value, dict):
-            # 先构建一份完整配置进行校验，校验通过才实际写入
+            # 先构建一份完整配置进行校验，校验通过后整体替换子配置对象
             merged = target.model_dump()
             merged.update(value)
             validated = target.__class__.model_validate(merged)
-            for nk, nv in validated.model_dump().items():
-                setattr(target, nk, nv)
+            setattr(settings, key, validated)
         elif isinstance(target, BaseModel) and isinstance(value, BaseModel):
             # 直接传入同类型对象
             try:

@@ -1,12 +1,12 @@
 # 压缩包提取流程
 
-从 ZIP / RAR / UVZ 压缩包中提取 ISBN。
+从 ZIP / RAR / 7Z / UVZ 压缩包中提取 ISBN。
 
 ## 流程概述
 
 ```mermaid
 graph TD
-    A[压缩包] --> B[打开 ZIP/RAR/UVZ]
+    A[压缩包] --> B[打开 ZIP/RAR/7Z/UVZ]
     B --> C{有密码?}
     C -->|是| D[返回失败]
     C -->|否| E{PDG 数量足够?}
@@ -52,7 +52,7 @@ graph TD
 
 ## 关键步骤
 
-1. **格式支持** — ZIP / UVZ / RAR 三种格式，通过 `_ArchiveReader` 抽象层统一访问
+1. **格式支持** — ZIP / UVZ / RAR / 7Z 四种格式，通过 `_ArchiveReader` 抽象层统一访问
 2. **meta.xml** — 新增的元数据来源，编码兼容 UTF-8 和 GB18030（声明与实际不符时自动兜底）
 3. **bookinfo.dat** — SSID（SS 号）可作为标识，严格等级 3 时 SSID 足以通过校验
 4. **PDG 解码** — 先检测文件头（jpg/png），失败后用 PdgView.dll 解码

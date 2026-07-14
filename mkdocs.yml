@@ -1,6 +1,6 @@
 #[Info]
 site_name: isbnx 
-site_description: 从PDF/图片/压缩包/epub文件中提取CIP信息
+site_description: 从PDF/图片/EPUB/MOBI/压缩包中提取ISBN号
 site_author: zscmmm
 
 nav:
@@ -13,6 +13,7 @@ nav:
   - 测试报告: isbnx_vs_cipx_report.md
   - API 参考:
     - api/isbnx.md
+    - api/batch.md
     - api/detector.md
     - api/config.md
     - api/models.md
@@ -142,7 +143,6 @@ markdown_extensions:
       custom_fences:
         - name: mermaid
           class: mermaid
-          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.tasklist:

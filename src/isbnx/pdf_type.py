@@ -9,8 +9,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import fitz  # PyMuPDF
 
 
@@ -50,20 +48,9 @@ def detect_pdf_type(doc: fitz.Document) -> str:
         if ratio >= 0.5:
             return "text_based"
         if ratio > 0:
-            return "scanned"  # "mixed" 一律认为是扫描件，避免误判为 text_based
-    except Exception:
+            return "mixed"
+    except (RuntimeError, ValueError):
+        # 第三方库 (fitz) 页访问无 LBYL 替代，异常处理合理
         pass
 
     return "scanned"
-
-
-def detect_pdf_type2(pdf_path: str | Path) -> str:
-    """判断 PDF 类型，失败时默认 scanned（走渲染+ONNX 检测）。"""
-    try:
-        # 'text_based', 'scanned', 'image_based', or 'mixed'."""
-        import pdf_inspector  # type: ignore
-
-        result = pdf_inspector.detect_pdf(str(pdf_path))
-        return result.pdf_type
-    except Exception:
-        return "scanned"

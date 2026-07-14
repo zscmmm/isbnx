@@ -35,6 +35,9 @@ from isbnx import extract
 result = extract("cover.png")
 if result.success:
     print(result.bookinfo.isbn13)  # 9787123456789
+
+# 优先从文件名提取（跳过内容扫描，更快）
+result = extract("9787123456789_三体.epub", filename=True)
 ```
 
 ### CLI
@@ -43,6 +46,7 @@ if result.success:
 isbnx cover.png          # 提取并打印结果
 isbnx --json book.pdf    # JSON 格式输出
 isbnx --strict 2 book.zip
+isbnx --filename 9787123456789.epub  # 从文件名提取
 ```
 
 ---
@@ -55,7 +59,46 @@ isbnx --strict 2 book.zip
 | PDF | PDF | 文本搜索 / 渲染检测 |
 | EPUB | EPUB | OPF 元数据 → XHTML 扫描 |
 | MOBI | MOBI | EXTH 元数据 → 文本扫描 |
-| 压缩包 | ZIP / RAR / UVZ | meta.xml → bookinfo.dat → PDG 图片 |
+| 压缩包 | ZIP / RAR / 7Z / UVZ | meta.xml → bookinfo.dat → PDG 图片 |
+
+---
+
+## 批量处理
+
+对整个目录进行批量 ISBN 提取与文件整理：
+
+```python
+from isbnx.batch import Batch
+
+result = Batch(
+    source_dir="D:/books",
+    success_dir="D:/books/done",
+    failed_dir="D:/books/unrecognized",
+).run()
+print(result)
+```
+
+也可配合 `BatchConfig` 自定义行为：
+
+```python
+from isbnx.batch import Batch, BatchConfig
+
+config = BatchConfig(
+    rename_mode=3,         # 替换旧标识再追加（默认）
+    extensions={".epub", ".pdf"},
+    max_workers=4,
+    keep_tree=True,        # 保留源目录结构
+)
+result = Batch(
+    source_dir="D:/books",
+    success_dir="D:/done",
+    failed_dir="D:/fail",
+    config=config,
+    try_run=True,          # 先预览不实际移动
+).run()
+```
+
+支持 4 种重命名模式、多线程并行、文件去重、干运行预览、CSV 报告导出、进度回调、优雅终止和源目录结构保留。
 
 ---
 

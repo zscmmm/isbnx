@@ -31,3 +31,5 @@ tests/
 *_report.csv
 batch_empty.csv
 *_empty.csv
+CODE_REVIEW_PLAN.md
+.gitignore

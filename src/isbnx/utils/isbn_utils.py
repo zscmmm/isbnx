@@ -7,6 +7,14 @@ import unicodedata
 
 from mneia_isbn import ISBN as _ISBN
 
+# ── 公共常量 ──────────────────────────────────────────
+
+# ISBN 关键词匹配（OCR 常见误识处理：1SBN/IS8N/I5BN 等）
+ISBN_KEYWORD = re.compile(r"[1Il]\s*[S5]\s*[8B]\s*N", re.IGNORECASE)
+
+# 字节级预过滤：快速判断二进制数据中是否可能包含 ISBN
+BYTE_GATE = re.compile(rb"isbn|97[89][\d\- Xx]{10,}", re.IGNORECASE)
+
 # ── 匹配模式 ──────────────────────────────────────────
 # 思路：宽松匹配候选项 → _clean_isbn() 清洗 → _is_valid() 校验
 #
@@ -32,6 +40,51 @@ _ISBN_FALLBACK = re.compile(
 )
 
 
+# ── 公共工具函数 ──────────────────────────────────────
+
+
+def validate_and_format(raw: str) -> str | None:
+    """清洗并校验 ISBN 候选字符串，返回 ISBN-13 或 None。
+
+    合并了 EPUB/MOBI 模块中的 ``_clean()`` + ``_validate()`` 逻辑：
+    先去除非数字字符，再校验长度和校验和。
+
+    Args:
+        raw: 可能含分隔符、全角字符的原始 ISBN 字符串。
+
+    Returns:
+        有效的 ISBN-13 字符串，或 ``None``。
+    """
+    cleaned = re.sub(r"[^0-9Xx]", "", raw).upper()
+    if len(cleaned) not in (10, 13):
+        return None
+    try:
+        obj = _ISBN(cleaned)
+        return str(obj.as_isbn13) if obj.is_valid else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def decode_bytes(data: bytes) -> str:
+    """尝试多种编码解码字节数据为文本。
+
+    依次尝试 UTF-8 → UTF-16-LE → GB18030 → Big5，
+    全部失败时用 UTF-8 + errors='ignore' 兜底。
+
+    Args:
+        data: 待解码的字节数据。
+
+    Returns:
+        解码后的文本字符串。
+    """
+    for enc in ("utf-8", "utf-16-le", "gb18030", "big5"):
+        try:
+            return data.decode(enc)
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    return data.decode("utf-8", errors="ignore")
+
+
 # ── 清洗与校验 ────────────────────────────────────────
 
 
@@ -47,7 +100,7 @@ def _clean_isbn(raw: str) -> str:
     return re.sub(r"[^0-9Xx]", "", raw).upper()
 
 
-def is_valid_isbn(cleaned: str) -> bool:
+def is_valid_isbn(cleaned: str, *, china_only: bool = True) -> bool:
     """校验清洗后的字符串是否为合法 ISBN 格式。
 
     除基本的 ISBN 校验和检查外，还会拒绝以下伪 ISBN：
@@ -57,6 +110,9 @@ def is_valid_isbn(cleaned: str) -> bool:
 
     Args:
         cleaned: 纯数字/X 的 ISBN 字符串（不含分隔符）。
+        china_only: 是否限制 ISBN-10 必须以 ``7``（中国组号）开头。
+            默认 ``True``（仅接受中国大陆出版书籍）。
+            设为 ``False`` 时接受任意组号的 ISBN。
 
     Returns:
         符合 ISBN 格式时返回 True。
@@ -70,11 +126,11 @@ def is_valid_isbn(cleaned: str) -> bool:
         # ISBN-10 必须以 7 开头（中国组号）。
         # 本项目仅面向中国大陆出版书籍，组号 7 对应中国。
         # 其他组号（如 0/1=英语区、2=法语区、3=德语区、4=日本等）会被拒绝。
-        # 如需支持外国书籍，移除此限制即可。
-        if len(cleaned) == 10 and not cleaned.startswith("7"):
+        # 如需支持外国书籍，传入 china_only=False 即可。
+        if china_only and len(cleaned) == 10 and not cleaned.startswith("7"):
             return False
         return _ISBN(cleaned).is_valid
-    except Exception:
+    except Exception:  # noqa: BLE001
         return False
 
 
@@ -136,7 +192,16 @@ def extract_isbn(text: str) -> str | None:
 
 
 def extract_isbn_from_lines(lines: list[str]) -> str | None:
-    """从 OCR 文本行列表中提取 ISBN。"""
+    """从 OCR 文本行列表中提取 ISBN。
+
+    依次尝试：单行提取 → 相邻两行拼接 → 全部行拼接。
+
+    Args:
+        lines: OCR 识别的文本行列表。
+
+    Returns:
+        提取到的 ISBN 字符串，或 ``None``。
+    """
     for line in lines:
         result = extract_isbn(line)
         if result is not None:
@@ -151,5 +216,5 @@ def extract_isbn_from_lines(lines: list[str]) -> str | None:
         result = extract_isbn(combined)
         if result is not None:
             return result
-    # 最后尝试把所有行拼接后提取
-    return extract_isbn("".join(lines))
+    # 最后尝试把所有行拼接后提取（用空格分隔，避免跨行数字拼接成假 ISBN）
+    return extract_isbn(" ".join(lines))

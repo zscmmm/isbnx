@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 
 from isbnx.models import BookInfo
+from isbnx.utils.isbn_utils import is_valid_isbn as _is_valid_isbn
 
 # ── ISBN 提取 ──────────────────────────────────────────
 
@@ -17,9 +18,8 @@ from isbnx.models import BookInfo
 def extract_isbn(lines: list[str]) -> str | None:
     """从文本行中提取 ISBN。
 
-    支持 ISBN-10（末尾可为 X）和 ISBN-13。
-    优先紧跟 ``ISBN`` 标记后的内容（支持跨行）。
-    回退：尝试 978/979 开头的 13 位候选。
+    先对各行做 CIP 特定的规范化（全角→半角、标点统一），
+    再委托 ``isbn_utils.extract_isbn_from_lines`` 完成核心提取。
 
     Args:
         lines: 文本行列表。
@@ -27,38 +27,10 @@ def extract_isbn(lines: list[str]) -> str | None:
     Returns:
         纯数字 ISBN 字符串，未找到时返回 None。
     """
+    from isbnx.utils.isbn_utils import extract_isbn_from_lines as _extract_from_lines
+
     normalized = [_normalize_line(line) for line in lines]
-    for idx, line in enumerate(normalized):
-        m = re.search(r"(?:ISBN|1SBN|IS8N)", line, re.IGNORECASE)
-        if not m:
-            continue
-
-        pieces = [line[m.end() :]]
-        candidate = _extract_isbn_from_window(" ".join(pieces))
-        if _is_valid_isbn(candidate):
-            return candidate
-
-        # 尝试拼合下一行（常见于 OCR 跨行截断）
-        if idx + 1 < len(normalized):
-            nxt = normalized[idx + 1].lstrip()
-            if nxt and (nxt[0].isdigit() or nxt[0] in "-Xx"):
-                pieces.append(nxt)
-                candidate = _extract_isbn_from_window(" ".join(pieces))
-                if _is_valid_isbn(candidate):
-                    return candidate
-
-    # 回退：漏掉 ISBN 标记时直接找 978/979 开头候选
-    for line in normalized:
-        candidate = _extract_isbn_from_window(line, require_prefix=True)
-        if _is_valid_isbn(candidate):
-            return candidate
-
-    full_text = " ".join(normalized)
-    candidate = _extract_isbn_from_window(full_text, require_prefix=True)
-    if _is_valid_isbn(candidate):
-        return candidate
-
-    return None
+    return _extract_from_lines(normalized)
 
 
 # ── CIP 核字号提取 ────────────────────────────────────
@@ -173,12 +145,6 @@ def _normalize_line(line: str) -> str:
     line = line.replace("—", "-").replace("－", "-").replace("–", "-")
     line = re.sub(r"\s+", " ", line)
     return line.strip()
-
-
-def _is_valid_isbn(value: str | None) -> bool:
-    if not value:
-        return False
-    return bool(re.match(r"^\d{13}$", value) or re.match(r"^\d{10}$", value) or re.match(r"^\d{9}X$", value))
 
 
 def _extract_isbn_from_window(value: str, require_prefix: bool = False) -> str | None:

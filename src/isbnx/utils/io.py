@@ -40,7 +40,17 @@ def require_suffix(path: str | Path, suffixes: tuple[str, ...], kind: str) -> Pa
 
 
 def detect_file_kind(path: str | Path) -> ExtractKind:
-    """根据后缀快速判断该文件适合走哪条提取路径。"""
+    """根据文件后缀判断提取路径类型。
+
+    Args:
+        path: 文件路径。
+
+    Returns:
+        提取路径类型：``"image"`` / ``"pdf"`` / ``"epub"`` / ``"mobi"`` / ``"archive"``。
+
+    Raises:
+        ValueError: 不支持的文件后缀。
+    """
     ext = Path(path).suffix.lower()
     if ext in _IMAGE_SUFFIXES:
         return "image"
@@ -55,15 +65,35 @@ def detect_file_kind(path: str | Path) -> ExtractKind:
     raise ValueError(f"不支持的文件格式: {ext or '无后缀'}（支持图片/pdf/epub/mobi/zip/rar/7z/uvz）")
 
 
-def load_image(img: str | Image.Image | MatLike | Path | bytes) -> Image.Image:
-    """统一加载图片为 RGB PIL Image，支持路径 / bytes / ndarray / PIL。"""
+def load_image(img: str | Path | Image.Image | MatLike | bytes) -> Image.Image:
+    """统一加载图片为 RGB PIL Image。
+
+    支持路径字符串/Path、PIL Image、OpenCV MatLike、字节数据等多种输入。
+    自动处理 EXIF 旋转和 BGR→RGB 转换。
+
+    Args:
+        img: 图片输入，支持以下类型：
+
+            - ``str`` / ``Path`` — 文件路径
+            - ``PIL.Image.Image`` — 直接复用（EXIF 旋转后转 RGB）
+            - ``bytes`` — 从字节流解码
+            - ``numpy.ndarray`` — OpenCV 格式（BGR/BGRA/灰度）
+
+    Returns:
+        RGB 模式的 PIL Image。
+
+    Raises:
+        ValueError: 不支持的数组形状。
+    """
     if isinstance(img, Image.Image):
         return ImageOps.exif_transpose(img).convert("RGB")
     if isinstance(img, (str, Path)):
         with Image.open(img) as image:
+            image.load()  # 确保像素数据完全加载，避免渐进式 JPEG 在文件关闭后访问出错
             return ImageOps.exif_transpose(image).convert("RGB")
     if isinstance(img, bytes):
         with Image.open(BytesIO(img)) as image:
+            image.load()
             return ImageOps.exif_transpose(image).convert("RGB")
 
     array = np.asarray(img)
@@ -72,7 +102,7 @@ def load_image(img: str | Image.Image | MatLike | Path | bytes) -> Image.Image:
     if array.ndim == 3 and array.shape[2] == 4:
         return Image.fromarray(array[:, :, [2, 1, 0, 3]], "RGBA").convert("RGB")
     if array.ndim == 3 and array.shape[2] == 3:
-        return Image.fromarray(array[:, :, ::-1], "RGB").convert("RGB")
+        return Image.fromarray(np.ascontiguousarray(array[:, :, ::-1]), "RGB").convert("RGB")
     raise ValueError(f"Unsupported image array shape: {array.shape}")
 
 

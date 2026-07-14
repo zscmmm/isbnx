@@ -25,18 +25,22 @@ import os
 import re
 import sys
 import tempfile
+import threading
 import time
 import zipfile
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
+from loguru import logger
 from PIL import Image
 
 from isbnx.config import settings
 from isbnx.detector import Detector, get_detector
 from isbnx.models import BookInfo, ExtractResult, Locate, Meta
-from isbnx.utils.filename import extract_from_filename
+
+if TYPE_CHECKING:
+    from isbnx.config import Settings
 
 # ── 图片文件签名 ──
 _JPEG_HEADER = b"\xff\xd8\xff"
@@ -58,6 +62,10 @@ _KEY_MAP: dict[str, str] = {
     "ssid": "ssid",
     "ss": "ssid",
 }
+
+# ── PDG DLL 线程锁（DLL 内部有全局状态，多线程并发调用会崩溃） ──
+
+_pdg_dll_lock = threading.Lock()
 
 
 # ═══════════════════════════════════════════════════════════
@@ -153,21 +161,18 @@ def _pdg_to_image(data: bytes) -> Image.Image | None:
     if _is_image_file(data):
         try:
             return Image.open(io.BytesIO(data)).convert("RGB")
-        except Exception:
-            pass  # 不要直接返回 None，继续尝试 PdgView.dll
+        except (OSError, ValueError):
+            logger.debug("PIL 直接解码失败，尝试 PdgView.dll")
 
     # PdgView.dll 解码
-    try:
-        img = _pdg_decode_with_dll(data)
-        if img is not None:
-            return img
-    except Exception:
-        pass
+    img = _pdg_decode_with_dll(data)
+    if img is not None:
+        return img
 
     # 最后兜底
     try:
         return Image.open(io.BytesIO(data)).convert("RGB")
-    except Exception:
+    except (OSError, ValueError):
         return None
 
 
@@ -192,61 +197,65 @@ def _pdg_decode_with_dll(data: bytes) -> Image.Image | None:
     if sys.platform != "win32":
         return None
 
-    dll_path = resources.files(__package__) / settings.archive.pdgview_path
+    dll_path = resources.files(__package__) / "pdgview" / "PdgView.dll"
     if not dll_path.is_file():
         return None
 
-    dll = ctypes.cdll.LoadLibrary(str(dll_path))
-    dll.pdgInit()
+    with _pdg_dll_lock:
+        dll = ctypes.cdll.LoadLibrary(str(dll_path))
+        dll.pdgInit()
 
-    header = _parse_pdg_header(data)
-    if header is None:
-        return None
-    x_pix, y_pix, _ = header
-
-    fd, tmp_path = tempfile.mkstemp(suffix=".pdg")
-    decoded_ok = False
-    img_buffer_ptr = ctypes.c_void_p()
-    try:
-        os.write(fd, data)
-        os.close(fd)
-
-        size = ctypes.c_int()
-        imgtype = ctypes.c_int()
-        ret = dll.pdgDecode(
-            ctypes.c_char_p(tmp_path.encode("utf-8") + b"\0"),
-            ctypes.c_int(x_pix),
-            ctypes.c_int(y_pix),
-            ctypes.byref(img_buffer_ptr),
-            ctypes.byref(size),
-            ctypes.byref(imgtype),
-        )
-        if ret != 0 or not img_buffer_ptr:
+        header = _parse_pdg_header(data)
+        if header is None:
             return None
-        decoded_ok = True
+        x_pix, y_pix, _ = header
 
-        buf = (ctypes.c_byte * size.value).from_address(img_buffer_ptr.value)  # type: ignore[arg-type]
-        img = Image.open(io.BytesIO(bytes(buf))).convert("RGB")
-        return img
-    finally:
+        fd, tmp_path = tempfile.mkstemp(suffix=".pdg")
+        img_buffer_ptr = ctypes.c_void_p()
         try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
-        if decoded_ok:
+            os.write(fd, data)
+
+            size = ctypes.c_int()
+            imgtype = ctypes.c_int()
+            ret = dll.pdgDecode(
+                ctypes.c_char_p(tmp_path.encode("utf-8") + b"\0"),
+                ctypes.c_int(x_pix),
+                ctypes.c_int(y_pix),
+                ctypes.byref(img_buffer_ptr),
+                ctypes.byref(size),
+                ctypes.byref(imgtype),
+            )
+            if ret != 0 or not img_buffer_ptr:
+                return None
+
+            buf = (ctypes.c_byte * size.value).from_address(img_buffer_ptr.value)  # type: ignore[arg-type]
+            img = Image.open(io.BytesIO(bytes(buf))).convert("RGB")
+            return img
+        finally:
             try:
-                dll.pdgFreeBuffer(img_buffer_ptr)
-            except Exception:
+                os.close(fd)
+            except OSError:
                 pass
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            # 按指针值判断是否释放，而非 decoded_ok 标记
+            if img_buffer_ptr.value:
+                try:
+                    dll.pdgFreeBuffer(img_buffer_ptr)
+                except OSError:
+                    pass
 
 
 def _extract_result_from_image(
     data: bytes,
-    detector,
+    detector: Detector | None,
     *,
     source: str,
     locate_page: int,
     locate_method: Literal["leg001", "cov", "pdg"],
+    strict: int = 3,
 ) -> ExtractResult | None:
     """将 PDG 字节解码为图片后运行 ONNX 检测 + OCR，返回完整提取结果。"""
     img = _pdg_to_image(data)
@@ -254,6 +263,7 @@ def _extract_result_from_image(
         return None
     det = detector or get_detector()
     result = det.process(img, source=source, source_type="archive")
+    result.strict = strict
     if result.locate is not None:
         result.locate.page = locate_page
         result.locate.method = locate_method
@@ -279,7 +289,9 @@ class _ArchiveReader(ABC):
     def read(self, name: str) -> bytes: ...
 
     @abstractmethod
-    def getinfo(self, name: str): ...
+    def get_file_size(self, name: str) -> int:
+        """返回压缩包内指定文件的字节大小。"""
+        ...
 
     @abstractmethod
     def is_encrypted(self) -> bool: ...
@@ -306,8 +318,8 @@ class _ZipReader(_ArchiveReader):
     def read(self, name: str) -> bytes:
         return self._zf.read(name)
 
-    def getinfo(self, name: str):
-        return self._zf.getinfo(name)
+    def get_file_size(self, name: str) -> int:
+        return self._zf.getinfo(name).file_size
 
     def is_encrypted(self) -> bool:
         for info in self._zf.infolist():
@@ -333,8 +345,8 @@ class _RarReader(_ArchiveReader):
     def read(self, name: str) -> bytes:
         return self._rf.read(name)
 
-    def getinfo(self, name: str):
-        return self._rf.getinfo(name)
+    def get_file_size(self, name: str) -> int:
+        return self._rf.getinfo(name).file_size
 
     def is_encrypted(self) -> bool:
         return any(getattr(info, "encrypted", False) for info in self._rf.infolist())
@@ -355,13 +367,32 @@ class _SevenZipReader(_ArchiveReader):
     """
 
     def __init__(self, path: str) -> None:
-        import tempfile  # noqa: PLC0415
-
         import py7zr  # noqa: PLC0415
 
         self._path = path
         self._sz = py7zr.SevenZipFile(path, mode="r")
-        self._tmpdir = tempfile.mkdtemp(prefix="isbnx_7z_")
+        self._tmpdir: str | None = None  # 延迟到首次 read() 时创建
+
+    def _ensure_tmpdir(self) -> str:
+        """确保临时目录已创建并返回路径。"""
+        if self._tmpdir is None:
+            self._tmpdir = tempfile.mkdtemp(prefix="isbnx_7z_")
+        return self._tmpdir
+
+    def __del__(self) -> None:
+        """兜底清理：若 close() 未被调用则清理临时目录和 SevenZipFile。"""
+        try:
+            if self._tmpdir is not None:
+                import shutil  # noqa: PLC0415
+
+                shutil.rmtree(self._tmpdir, ignore_errors=True)
+                self._tmpdir = None
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self._sz.close()
+        except Exception:  # noqa: BLE001
+            pass
 
     def namelist(self) -> list[str]:
         return self._sz.getnames()
@@ -371,30 +402,47 @@ class _SevenZipReader(_ArchiveReader):
 
         import py7zr  # noqa: PLC0415
 
+        tmpdir = self._ensure_tmpdir()
         # 每次 read 都开新实例，避免 py7zr 多次 extract 的 CrcError
         with py7zr.SevenZipFile(self._path, mode="r") as sz:
-            sz.extract(path=self._tmpdir, targets=[name])
-        target = Path(self._tmpdir) / name
+            sz.extract(path=tmpdir, targets=[name])
+        target = Path(tmpdir) / name
         if not target.exists():
             raise KeyError(name)
         return target.read_bytes()
 
-    def getinfo(self, name: str):
-        return self._sz.getinfo(name)
+    def get_file_size(self, name: str) -> int:
+        """返回压缩包内指定文件的解压后字节大小。
+
+        Args:
+            name: 压缩包内文件路径。
+
+        Returns:
+            解压后字节大小。文件不存在时返回 0。
+        """
+        try:
+            info = self._sz.getinfo(name)
+        except KeyError:
+            return 0
+        if info is not None:
+            return info.uncompressed
+        return 0
 
     def is_encrypted(self) -> bool:
         try:
             return bool(self._sz.needs_password())
-        except Exception:
+        except (RuntimeError, ValueError):
             return False
 
     def close(self) -> None:
-        import shutil  # noqa: PLC0415
-
         try:
             self._sz.close()
         finally:
-            shutil.rmtree(self._tmpdir, ignore_errors=True)
+            if self._tmpdir is not None:
+                import shutil  # noqa: PLC0415
+
+                shutil.rmtree(self._tmpdir, ignore_errors=True)
+                self._tmpdir = None
 
 
 def _open_archive(path: Path) -> _ArchiveReader:
@@ -409,14 +457,18 @@ def _open_archive(path: Path) -> _ArchiveReader:
     raise ValueError(f"不支持的压缩包格式: {ext}（支持 zip/rar/7z/uvz）")
 
 
-def _get_info_ignore_case(arc: _ArchiveReader, names: set[str], target: str):
-    """按文件名（忽略大小写、忽略目录层级）查找文件信息。"""
+def _get_file_size_ignore_case(arc: _ArchiveReader, names: set[str], target: str) -> int | None:
+    """按文件名（忽略大小写、忽略目录层级）查找文件，返回字节大小。
+
+    Returns:
+        文件大小（字节），未找到时返回 None。
+    """
     target_lower = target.lower()
     for name in names:
         if Path(name).name.lower() == target_lower:
             try:
-                return arc.getinfo(name)
-            except Exception:
+                return arc.get_file_size(name)
+            except KeyError:
                 return None
     return None
 
@@ -428,7 +480,7 @@ def _read_file_ignore_case(arc: _ArchiveReader, names: set[str], target: str) ->
         if Path(name).name.lower() == target_lower:
             try:
                 return arc.read(name)
-            except Exception:
+            except (KeyError, OSError):
                 return None
     return None
 
@@ -518,9 +570,10 @@ class ArchiveExtractor:
     def extract(
         cls,
         archive_path: str | Path,
-        detector: Detector | None = None,
         *,
+        detector: Detector | None = None,
         filename: bool = False,
+        config: Settings | None = None,
     ) -> ExtractResult:
         """从压缩包（zip/rar/uvz）中提取 ISBN。
 
@@ -528,21 +581,14 @@ class ArchiveExtractor:
             archive_path: 压缩包文件路径。
             detector: 外部传入的 Detector 实例，为 None 时使用全局单例。
             filename: 是否优先从文件名中提取 ISBN。
+            config: 可选的完整配置对象，为 ``None`` 时从全局 ``settings`` 读取。
 
         Returns:
             ExtractResult — 包含 ISBN、源信息等。
         """
         t0 = time.perf_counter()
         archive_path = Path(archive_path)
-
-        if filename:
-            info = extract_from_filename(archive_path)
-            if info:
-                return ExtractResult(
-                    bookinfo=info,
-                    meta=Meta(source=str(archive_path), source_type="archive"),
-                    elapsed=0.0,
-                )
+        _cfg = config or settings
 
         try:
             with _open_archive(archive_path) as arc:
@@ -555,16 +601,18 @@ class ArchiveExtractor:
                         meta=Meta(source=str(archive_path), source_type="archive"),
                         error="压缩包有密码保护",
                         elapsed=time.perf_counter() - t0,
+                        strict=_cfg.strict,
                     )
 
                 # ── 步骤 1: PDG 数量检查 ──
                 pdg_count = _count_pdg(names)
-                if pdg_count < settings.archive.pdg_min_count:
+                if pdg_count < _cfg.archive.pdg_min_count:
                     return ExtractResult(
                         bookinfo=BookInfo(),
                         meta=Meta(source=str(archive_path), source_type="archive"),
-                        error=f"PDG 数量不足: {pdg_count} < {settings.archive.pdg_min_count}",
+                        error=f"PDG 数量不足: {pdg_count} < {_cfg.archive.pdg_min_count}",
                         elapsed=time.perf_counter() - t0,
+                        strict=_cfg.strict,
                     )
 
                 # ── 步骤 2: 元数据文件解析（meta.xml + bookinfo.dat）──
@@ -574,8 +622,8 @@ class ArchiveExtractor:
                 locate_method: str | None = None
 
                 # 2a: meta.xml
-                mx_info = _get_info_ignore_case(arc, names, "meta.xml")
-                if mx_info is not None and getattr(mx_info, "file_size", 0) <= _MAX_META_XML_SIZE:
+                mx_size = _get_file_size_ignore_case(arc, names, "meta.xml")
+                if mx_size is not None and mx_size <= _MAX_META_XML_SIZE:
                     raw = _read_file_ignore_case(arc, names, "meta.xml")
                     if raw:
                         meta_parsed = _parse_meta_xml(raw)
@@ -583,8 +631,8 @@ class ArchiveExtractor:
                             locate_method = "meta"
 
                 # 2b: bookinfo.dat
-                bi_info = _get_info_ignore_case(arc, names, "bookinfo.dat")
-                if bi_info is not None and getattr(bi_info, "file_size", 0) <= _MAX_BOOKINFO_SIZE:
+                bi_size = _get_file_size_ignore_case(arc, names, "bookinfo.dat")
+                if bi_size is not None and bi_size <= _MAX_BOOKINFO_SIZE:
                     raw = _read_file_ignore_case(arc, names, "bookinfo.dat")
                     if raw:
                         text, enc = _decode_bookinfo(raw)
@@ -597,7 +645,7 @@ class ArchiveExtractor:
                 merged = _merge_metadata(meta_parsed, bookinfo_parsed)
                 if merged.get("isbn") or merged.get("ssid"):
                     bookinfo = BookInfo(**merged)
-                    if bookinfo.is_valid():
+                    if bookinfo.is_valid(strict=_cfg.strict):
                         # 页码区分来源: -20=bookinfo.dat, -21=meta.xml
                         locate_page = -20 if locate_method == "bookinfo" else -21
                         return ExtractResult(
@@ -605,6 +653,7 @@ class ArchiveExtractor:
                             meta=Meta(source=str(archive_path), source_type="archive", encoding=encoding),
                             locate=Locate(page=locate_page, method=locate_method or "meta", extraction="text"),
                             elapsed=time.perf_counter() - t0,
+                            strict=_cfg.strict,
                         )
 
                 # ── 步骤 3: leg/cov 开头的 PDG → 图片 → ONNX ──
@@ -620,11 +669,11 @@ class ArchiveExtractor:
                 # leg 优先于 cov
                 for pdg_name in leg_pdg + cov_pdg:
                     try:
-                        info = arc.getinfo(pdg_name)
-                        if getattr(info, "file_size", 0) > _MAX_PDG_SIZE:
+                        file_size = arc.get_file_size(pdg_name)
+                        if file_size > _MAX_PDG_SIZE:
                             continue
                         raw = arc.read(pdg_name)
-                    except Exception:
+                    except (KeyError, OSError):
                         continue
                     locate_method = "leg001" if Path(pdg_name).stem.lower().startswith("leg") else "cov"
                     result = _extract_result_from_image(
@@ -633,6 +682,7 @@ class ArchiveExtractor:
                         source=str(archive_path),
                         locate_page=-10,
                         locate_method=locate_method,
+                        strict=_cfg.strict,
                     )
                     if result and result.success:
                         result.elapsed = time.perf_counter() - t0
@@ -640,14 +690,14 @@ class ArchiveExtractor:
 
                 # ── 步骤 4: 兜底 — 前 N 个 PDG ──
                 pdg_files = [n for n in all_pdg if n not in set(leg_pdg + cov_pdg)]
-                fallback_count = settings.archive.pdg_fallback_count
+                fallback_count = _cfg.archive.pdg_fallback_count
                 for idx, pdg_name in enumerate(pdg_files[:fallback_count]):
                     try:
-                        info = arc.getinfo(pdg_name)
-                        if getattr(info, "file_size", 0) > _MAX_PDG_SIZE:
+                        file_size = arc.get_file_size(pdg_name)
+                        if file_size > _MAX_PDG_SIZE:
                             continue
                         raw_pdg = arc.read(pdg_name)
-                    except Exception:
+                    except (KeyError, OSError):
                         continue
                     result = _extract_result_from_image(
                         raw_pdg,
@@ -655,6 +705,7 @@ class ArchiveExtractor:
                         source=str(archive_path),
                         locate_page=idx + 1,
                         locate_method="pdg",
+                        strict=_cfg.strict,
                     )
                     if result and result.success:
                         result.elapsed = time.perf_counter() - t0
@@ -666,12 +717,14 @@ class ArchiveExtractor:
                     meta=Meta(source=str(archive_path), source_type="archive"),
                     error="未提取到 ISBN",
                     elapsed=time.perf_counter() - t0,
+                    strict=_cfg.strict,
                 )
 
-        except Exception as e:
+        except (OSError, zipfile.BadZipFile, ValueError) as e:
             return ExtractResult(
                 bookinfo=BookInfo(),
                 meta=Meta(source=str(archive_path), source_type="archive"),
                 error=f"压缩包提取异常: {e}",
                 elapsed=time.perf_counter() - t0,
+                strict=_cfg.strict,
             )

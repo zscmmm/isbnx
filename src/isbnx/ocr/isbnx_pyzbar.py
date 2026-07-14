@@ -15,8 +15,9 @@ class ISBNXZbar:
 
     # 优先尝试的条码符号类型（EAN-13 是最常见的 ISBN 条码格式）
     _PREFERRED = [ZBarSymbol.EAN13]
-    # 回退符号类型
+    # 回退符号类型（preferred_only=False 时全部尝试）
     _FALLBACK = [
+        ZBarSymbol.EAN13,
         ZBarSymbol.ISBN10,
         ZBarSymbol.ISBN13,
     ]
@@ -29,7 +30,14 @@ class ISBNXZbar:
         self._symbols = self._PREFERRED if preferred_only else self._FALLBACK
 
     def decode(self, image: Image.Image) -> str | None:
-        """解码图片中的条码，返回第一条文本，无结果返回 None。"""
+        """解码图片中的条码。
+
+        Args:
+            image: 包含条码的 PIL Image。
+
+        Returns:
+            第一条条码的文本内容，未检测到时返回 ``None``。
+        """
         results = decode(image, symbols=self._symbols)
         for r in results:
             text = r.data.decode("utf-8", errors="replace").strip()

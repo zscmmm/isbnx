@@ -1,6 +1,6 @@
 [project]
 name = "isbnx"
-version = "0.0.10"
+version = "0.0.11"
 description = "从 PDF、图片、压缩包和 EPUB 文件中提取 ISBN 号，支持 ONNX 检测和 OCR 识别"
 readme = "README.md"
 authors = [
@@ -20,7 +20,9 @@ dependencies = [
     "rapidocr>=3.9.0",
     "rarfile>=4.2",
     "py7zr>=0.22",
-    "tqdm>=4.67.0",
+    "send2trash>=1.8.0",
+    "dedupx>=0.1.0",
+    "pdf-inspector>=0.2.0",
 ]
 
 [dependency-groups]
@@ -34,6 +36,7 @@ dev = [
     "pytest>=8.3.5",
     "pre-commit>=4.6.0",
     "pandas>=3.0.3",
+    "pymdown-extensions>=11.0.1",
 ]
 
 

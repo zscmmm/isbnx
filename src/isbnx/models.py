@@ -6,15 +6,15 @@
 
 from __future__ import annotations
 
-from functools import cached_property
 from pathlib import Path
+from time import perf_counter as _perf_counter
 from typing import Any, Literal
 
 from mneia_isbn import ISBN  # type: ignore
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field
 
-from isbnx.config import settings
+from isbnx.config import SourceType
 
 # ── ONNX 检测类别映射 ──
 DETECT_CLASSES: dict[int, str] = {
@@ -129,11 +129,11 @@ class Locate(BaseModel):
         for index, detect in enumerate(self.candidates, 1):
             score_tag = int(round(detect.score * 10000))
             filename = f"page{self.page:03d}_{detect.class_id}_{score_tag:03d}.png"
-            path = target_dir / filename
-            if path.exists() and not overwrite:
-                path = target_dir / f"page{self.page:03d}_{detect.class_id}_{score_tag:03d}_{index}.png"
-            detect.image.save(path)
-            saved_paths.append(path)
+            filepath = target_dir / filename
+            if filepath.exists() and not overwrite:
+                filepath = target_dir / f"page{self.page:03d}_{detect.class_id}_{score_tag:03d}_{index}.png"
+            detect.image.save(filepath)
+            saved_paths.append(filepath)
         return saved_paths
 
 
@@ -192,9 +192,9 @@ class BookInfo(BaseModel):
     isbn: str | None = None
     ssid: str | None = None
 
-    @cached_property
+    @property
     def _isbn(self) -> ISBN | None:
-        """缓存的 ISBN 对象，避免重复解析。"""
+        """解析 ISBN 对象（每次访问重新解析，保证与 isbn 字段一致）。"""
         if not self.isbn:
             return None
         return ISBN(self.isbn)
@@ -217,18 +217,16 @@ class BookInfo(BaseModel):
         obj = self._isbn
         return str(obj.as_isbn10) if (obj and obj.is_valid) else None
 
-    def is_valid(self, strict: int | None = None) -> bool:
+    def is_valid(self, strict: int = 3) -> bool:
         """校验是否有效。
 
         Args:
-            strict: 严格等级（值越小越严格）。
+            strict: 严格等级（值越小越严格），必须由调用方显式传入。
+
                 - ``1``: ISBN 和 SSID 都必须存在，且 ISBN 校验通过。
                 - ``2``: ISBN 必须存在且校验通过。
-                - ``3``: ISBN 校验通过 或 SSID 存在。
-                ``None`` 时从 ``settings.strict`` 读取。
+                - ``3``: ISBN 校验通过 或 SSID 存在（默认）。
         """
-        if strict is None:
-            strict = settings.strict
         if strict <= 1:
             return bool(self.isbn_valid and self.ssid)
         if strict <= 2:
@@ -261,6 +259,10 @@ class ExtractResult(BaseModel):
     from_filename: bool = False
     """ISBN/SSID 是否来自文件名提取（而非文件内容）。"""
 
+    # ── 校验等级 ──
+    strict: int = 3
+    """strict 等级（1/2/3），用于 success 属性判定。默认 3（最宽松）。"""
+
     # ── 其他信息 ──
     elapsed: float | None = None
     error: str | None = None
@@ -268,7 +270,58 @@ class ExtractResult(BaseModel):
     @property
     def success(self) -> bool:
         """提取是否成功（根据 strict 等级校验）。"""
-        return self.bookinfo.is_valid()
+        return self.bookinfo.is_valid(strict=self.strict)
+
+    @classmethod
+    def ok(
+        cls,
+        source: str,
+        source_type: SourceType,
+        isbn: str,
+        t0: float,
+        strict: int = 3,
+    ) -> ExtractResult:
+        """创建成功的提取结果。
+
+        Args:
+            source: 源文件路径。
+            source_type: 源文件类型（pdf/image/archive/epub/mobi）。
+            isbn: 提取到的有效 ISBN。
+            t0: 计时起点（``time.perf_counter()`` 值）。
+            strict: 校验等级（1/2/3），默认 3。
+        """
+        return cls(
+            bookinfo=BookInfo(isbn=isbn),
+            meta=Meta(source=source, source_type=source_type),
+            elapsed=_perf_counter() - t0,
+            strict=strict,
+        )
+
+    @classmethod
+    def fail(
+        cls,
+        source: str,
+        source_type: SourceType,
+        error: str,
+        t0: float,
+        strict: int = 3,
+    ) -> ExtractResult:
+        """创建失败的提取结果。
+
+        Args:
+            source: 源文件路径。
+            source_type: 源文件类型（pdf/image/archive/epub/mobi）。
+            error: 失败原因。
+            t0: 计时起点（``time.perf_counter()`` 值）。
+            strict: 校验等级（1/2/3），默认 3。
+        """
+        return cls(
+            bookinfo=BookInfo(),
+            meta=Meta(source=source, source_type=source_type),
+            error=error,
+            elapsed=_perf_counter() - t0,
+            strict=strict,
+        )
 
     def __repr__(self) -> str:
         b = self.bookinfo

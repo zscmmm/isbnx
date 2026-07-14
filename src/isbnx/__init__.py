@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from isbnx.batch import Batch, BatchResult
+    from isbnx.batch import Batch, BatchConfig, BatchResult
     from isbnx.config import Settings, configure, settings
     from isbnx.isbnx import ISBNX, extract
     from isbnx.models import Detect, ExtractResult, Locate, Meta, OCRResult
@@ -20,33 +20,37 @@ __all__ = [
     "OCRResult",
     "ExtractResult",
     "Batch",
+    "BatchConfig",
     "BatchResult",
 ]
+
+
+_LAZY_IMPORT_MAP: dict[str, str] = {
+    "Settings": "isbnx.config",
+    "configure": "isbnx.config",
+    "settings": "isbnx.config",
+    "ISBNX": "isbnx.isbnx",
+    "extract": "isbnx.isbnx",
+    "Detect": "isbnx.models",
+    "Locate": "isbnx.models",
+    "Meta": "isbnx.models",
+    "OCRResult": "isbnx.models",
+    "ExtractResult": "isbnx.models",
+    "Batch": "isbnx.batch",
+    "BatchConfig": "isbnx.batch",
+    "BatchResult": "isbnx.batch",
+}
 
 
 def __getattr__(name: str):
     """懒加载子模块，避免 `import isbnx` 时触发 pydantic/onnxruntime 等重型导入。"""
     import importlib
 
-    _lazy_map: dict[str, str] = {
-        "Settings": "isbnx.config",
-        "configure": "isbnx.config",
-        "settings": "isbnx.config",
-        "ISBNX": "isbnx.isbnx",
-        "extract": "isbnx.isbnx",
-        "Detect": "isbnx.models",
-        "Locate": "isbnx.models",
-        "Meta": "isbnx.models",
-        "OCRResult": "isbnx.models",
-        "ExtractResult": "isbnx.models",
-        "Batch": "isbnx.batch",
-        "BatchResult": "isbnx.batch",
-    }
-    if name in _lazy_map:
-        mod = importlib.import_module(_lazy_map[name])
+    if name in _LAZY_IMPORT_MAP:
+        mod = importlib.import_module(_LAZY_IMPORT_MAP[name])
         return getattr(mod, name)
     msg = f"module {__name__!r} has no attribute {name!r}"
-    raise AttributeError(msg)
+    raise AttributeError(msg) from None
 
 
 def main() -> None:

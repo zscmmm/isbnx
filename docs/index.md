@@ -12,6 +12,9 @@ result = extract("cover.png")
 if result.success:
     print(result.bookinfo.isbn13)  # 9787123456789
 
+# 优先从文件名提取（跳过内容扫描，更快）
+result = extract("9787123456789_三体.epub", filename=True)
+
 # 也可以直接调用具体方法
 from isbnx import ISBNX
 
@@ -37,7 +40,7 @@ uv add isbnx
 | **PDF** | PDF | 书签定位 + 文本搜索（文本型）→ 渲染图片检测（扫描件） |
 | **EPUB** | EPUB | OPF 元数据优先 → XHTML 内容扫描 |
 | **MOBI** | MOBI | EXTH 元数据优先 → 文本记录扫描 |
-| **压缩包** | ZIP / RAR / UVZ | meta.xml → bookinfo.dat → leg001.pdg → 兜底 PDG 图片 |
+| **压缩包** | ZIP / RAR / 7Z / UVZ | meta.xml → bookinfo.dat → leg001.pdg → 兜底 PDG 图片 |
 
 ## 核心流程
 
@@ -70,14 +73,49 @@ config.detector.conf_threshold = 0.5
 result = ISBNX(config=config).from_image("cover.png")
 ```
 
+## 批量处理
+
+对整个目录进行批量 ISBN 提取与文件整理：
+
+```python
+from isbnx.batch import Batch, BatchConfig
+
+# 默认配置
+result = Batch(
+    source_dir="D:/books",
+    success_dir="D:/books/done",
+    failed_dir="D:/books/unrecognized",
+).run()
+
+# 自定义配置
+config = BatchConfig(
+    rename_mode=1,
+    extensions={".epub", ".pdf"},
+    max_workers=4,
+)
+result = Batch("D:/books", "D:/ok", "D:/fail", config=config).run()
+```
+
+主要功能：
+
+- **多线程并行** — ThreadPoolExecutor，自动适配 CPU 核数，降低 ONNX 锁争抢
+- **文件名预检** — 文件名已有 ISBN/SSID 的跳过内容提取，大幅提速
+- **4 种重命名模式** — 追加/前置、替换/保留旧标识，灵活控制
+- **文件去重** — 集成 `dedupx` 按 inode/大小/哈希去重
+- **干运行模式** — 通过 `try_run=True` 先预览，确认后再实际移动
+- **CSV 报告** — 可选输出详细处理记录
+- **进度回调** — 支持 `entries_callback` 驱动外部 UI
+- **优雅终止** — 通过 `shutdown_event` 从外部安全取消批量任务
+- **保留目录结构** — `keep_tree=True` 在目标目录保留源目录层级
+
 ## 文件分发规则
 
 `extract()` 会先根据文件后缀快速判断提取路径：
 
-- 图片：`.png` / `.jpg` / `.jpeg` / `.webp` / `.bmp`
+- 图片：`.png` / `.jpg` / `.jpeg` / `.webp` / `.bmp` / `.pdg`
 - PDF：`.pdf`
 - EPUB：`.epub`
 - MOBI：`.mobi`
-- 压缩包：`.zip` / `.rar` / `.uvz`
+- 压缩包：`.zip` / `.rar` / `.uvz` / `.7z`
 
 这一步是轻量预检，不做内容嗅探；真正的文件内容校验仍由对应提取器负责。 

@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 from PIL import Image
 
-from isbnx.config import settings
 from isbnx.models import OCRResult
+
+if TYPE_CHECKING:
+    from isbnx.config import Settings
 
 
 class ISBNXRapidOCR:
     """RapidOCR (onnxruntime) OCR 引擎。
 
-    根据 ``settings.ocr.ocr_model`` 切换精度模式。
+    根据 ``config.ocr.ocr_model`` 切换精度模式。
 
     - ``"small"``: 快速启动，最小参数（默认）
 
@@ -21,7 +25,11 @@ class ISBNXRapidOCR:
 
     """
 
-    def __init__(self) -> None:
+    def __init__(self, config: Settings | None = None) -> None:
+        from isbnx.config import settings
+
+        _cfg = config or settings
+
         try:
             from rapidocr import (  # noqa: PLC0415
                 EngineType,
@@ -34,7 +42,7 @@ class ISBNXRapidOCR:
         except ImportError:
             raise ImportError("rapidocr 未安装，请执行 `uv add rapidocr`") from None
 
-        if settings.ocr.ocr_model == "medium":
+        if _cfg.ocr.ocr_model == "medium":
             params = {
                 "Det.engine_type": EngineType.ONNXRUNTIME,
                 "Det.lang_type": LangDet.CH,
@@ -44,7 +52,7 @@ class ISBNXRapidOCR:
                 "Rec.lang_type": LangRec.CH,
                 "Rec.model_type": ModelType.MEDIUM,
                 "Rec.ocr_version": OCRVersion.PPOCRV6,
-                "Det.limit_side_len": settings.ocr.det_limit_side_len,
+                "Det.limit_side_len": _cfg.ocr.det_limit_side_len,
                 "Cls.engine_type": EngineType.ONNXRUNTIME,
                 "Cls.lang_type": LangDet.CH,
                 "Cls.model_type": ModelType.MOBILE,
@@ -60,7 +68,7 @@ class ISBNXRapidOCR:
                 "Rec.lang_type": LangRec.CH,
                 "Rec.model_type": ModelType.SMALL,
                 "Rec.ocr_version": OCRVersion.PPOCRV6,
-                "Det.limit_side_len": settings.ocr.det_limit_side_len,
+                "Det.limit_side_len": _cfg.ocr.det_limit_side_len,
                 "Cls.engine_type": EngineType.ONNXRUNTIME,
                 "Cls.lang_type": LangDet.CH,
                 "Cls.model_type": ModelType.MOBILE,
@@ -68,18 +76,27 @@ class ISBNXRapidOCR:
             }
 
         # 可选：禁用方向分类器（ISBN 文字始终水平，无需分类）
-        if not settings.ocr.use_cls:
+        if not _cfg.ocr.use_cls:
             params["Global.use_cls"] = False
 
         # 可选：跳过文本检测（YOLO 已定位到 ISBN 区域，只需识别）
-        if not settings.ocr.use_det:
+        if not _cfg.ocr.use_det:
             params["Global.use_det"] = False
 
         params["Global.log_level"] = "warning"
         self._engine = RapidOCR(params=params)
 
     def recognize(self, image: Image.Image) -> OCRResult:
-        """对图片进行 OCR 识别，返回标准化结果。"""
+        """对图片进行 OCR 识别，返回标准化结果。
+
+        内部会先将图片转为灰度 3 通道以提高识别效率。
+
+        Args:
+            image: RGB 模式的 PIL Image。
+
+        Returns:
+            :class:`~isbnx.models.OCRResult` 包含识别文本行和原始引擎输出。
+        """
         # 转为灰度图再复制到 3 通道，减少颜色冗余，OCR 文本识别只需亮度信息
         gray = np.asarray(image.convert("L"))  # (H, W)
         img = np.stack([gray] * 3, axis=-1)  # (H, W, 3)
