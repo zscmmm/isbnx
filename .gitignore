@@ -33,3 +33,4 @@ batch_empty.csv
 *_empty.csv
 CODE_REVIEW_PLAN.md
 .gitignore
+isbnx.nuitka-package.config.yml

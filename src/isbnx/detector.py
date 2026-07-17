@@ -5,7 +5,6 @@ from __future__ import annotations
 import threading
 import time
 from functools import cached_property
-from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -309,10 +308,11 @@ class Detector:
 
     @cached_property
     def _model_path(self) -> Path:
-        # 包内路径（优先）
-        p = files(__package__) / self._config.detector.model_path
+        # 包内路径（优先）：用 __file__ 而非 importlib.resources，
+        # 兼容 Nuitka 编译环境（importlib.resources 在编译后失效）
+        p = Path(__file__).resolve().parent / self._config.detector.model_path
         if p.is_file():
-            return Path(str(p))
+            return p
         # 回退：直接作为文件系统路径
         p = Path(self._config.detector.model_path)
         if p.is_file():

@@ -19,7 +19,6 @@
 from __future__ import annotations
 
 import ctypes
-import importlib.resources as resources
 import io
 import os
 import re
@@ -197,7 +196,7 @@ def _pdg_decode_with_dll(data: bytes) -> Image.Image | None:
     if sys.platform != "win32":
         return None
 
-    dll_path = resources.files(__package__) / "pdgview" / "PdgView.dll"
+    dll_path = Path(__file__).parent / "pdgview" / "PdgView.dll"
     if not dll_path.is_file():
         return None
 
