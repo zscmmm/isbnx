@@ -30,6 +30,24 @@ class FileRenamer:
         self._success_dir = success_dir
 
     @staticmethod
+    def _remove_tag_from_stem(stem: str, tag_digits: str) -> str:
+        """从文件名主干中移除 ISBN/SSID 数字串（兼容数字间有短横线的格式）。
+
+        ``old_tag``（如 ``9787567673120``）是纯数字，但文件名中的实际写法可能
+        带短横线（如 ``978-7-5676-7312-0``），直接用 ``str.replace`` 会匹配
+        不到。此方法用正则匹配数字间可选短横线的模式来定位和移除。
+
+        Args:
+            stem: 文件名主干。
+            tag_digits: 纯数字 ISBN/SSID（不含分隔符）。
+
+        Returns:
+            移除标识后的文件名主干。
+        """
+        pattern = r"-?".join(tag_digits)
+        return re.sub(pattern, "_", stem, count=1)
+
+    @staticmethod
     def clean_stem(stem: str) -> str:
         """清理文件名中多余下划线并去除首尾下划线。
 
@@ -177,28 +195,30 @@ class FileRenamer:
             old_tag = None
 
         if mode == 1:
-            # 末尾追加，旧标识不变。文件名已有则不重复
-            if not (old_tag and tag in stem):
+            # 末尾追加，旧标识不变。文件名已含 ISBN（兼容连字符）则跳过追加
+            stem_flat = stem.replace("-", "").replace(" ", "")
+            if not (old_tag and tag in stem_flat):
                 stem = f"{stem}_{tag}"
             stem = stem.strip("_ ")
 
         elif mode == 2:
-            # 最前面追加，旧标识不变。文件名已有则不重复
-            if not (old_tag and tag in stem):
+            # 最前面追加，旧标识不变。文件名已含 ISBN（兼容连字符）则跳过追加
+            stem_flat = stem.replace("-", "").replace(" ", "")
+            if not (old_tag and tag in stem_flat):
                 stem = f"{tag}_{stem}"
             stem = stem.strip("_ ")
 
         elif mode == 3:
             # 替换旧标识，再末尾追加
             if old_tag:
-                stem = stem.replace(old_tag, "_")
+                stem = self._remove_tag_from_stem(stem, old_tag)
             stem = self.clean_stem(stem)
             stem = f"{stem}_{tag}".strip("_ ")
 
         elif mode == 4:
             # 替换旧标识，再最前面追加
             if old_tag:
-                stem = stem.replace(old_tag, "_")
+                stem = self._remove_tag_from_stem(stem, old_tag)
             stem = self.clean_stem(stem)
             stem = f"{tag}_{stem}".strip("_ ")
 
