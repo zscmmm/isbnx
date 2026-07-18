@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -101,10 +100,20 @@ class BatchConfig(Settings):
     """
 
     # ── 扫描 ──
-    extensions: Iterable[str] | None = None
+    extensions: tuple[str, ...] | None = None
     exclude_dirs: set[str] | None = None
     max_workers: int | None = None
     recursive: bool = True
+
+    @field_validator("extensions", mode="before")
+    @classmethod
+    def _consume_extensions(cls, v: object) -> tuple[str, ...] | None:
+        """立即消费为 tuple，避免 Pydantic Iterable 类型存储为不可 pickle 的 ValidatorIterator。"""
+        if v is None:
+            return None
+        if isinstance(v, tuple):
+            return v
+        return tuple(v)
 
     # ── 重命名 ──
     rename_mode: int = 3
