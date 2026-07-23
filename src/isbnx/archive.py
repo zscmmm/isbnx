@@ -176,7 +176,15 @@ def _pdg_to_image(data: bytes) -> Image.Image | None:
 
 
 def _parse_pdg_header(data: bytes) -> tuple[int, int, int] | None:
-    """解析 PDG 文件头，返回 (width, height, pdg_type) 或 None。"""
+    """解析 PDG 文件头，返回 (width, height, pdg_type) 或 None。
+
+    校验规则:
+      - 对于已知类型（0xAA/0xAC/0xAB）使用硬编码或交换的尺寸
+      - 其他类型从字节 16-19 读取宽高，但会校验其合理性：
+        如果 ``x_pix * y_pix * 3 > len(data) * 60``，说明头信息
+        中的尺寸明显错误（PDG 压缩比通常不超过 20:1），返回 None
+        以避免将错误尺寸传给 PdgView.dll，防止产生超大图片。
+    """
     if len(data) < 140:
         return None
     pdg_type = data[15]
@@ -188,6 +196,11 @@ def _parse_pdg_header(data: bytes) -> tuple[int, int, int] | None:
         x_pix, y_pix = 1120, 1568
     elif pdg_type == 0xAB:
         x_pix, y_pix = y_pix, x_pix
+    else:
+        # 对未知类型做合理性校验：原始解码尺寸不应超过文件大小的 60 倍
+        # （60x 给 LZW 类压缩留足余量，远超常规 PDG 的 5-20x）
+        if x_pix * y_pix * 3 > len(data) * 60:
+            return None
     return x_pix, y_pix, pdg_type
 
 
