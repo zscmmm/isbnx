@@ -29,7 +29,12 @@ class OCRConfig(BaseModel):
 
     ocr_model: Literal["small", "medium"] = "small"  # OCR 模型精度，small/medium
     use_cls: bool = False
-    use_det: bool = True  # 是否启用 RapidOCR 文本检测（Det）。建议开启, 除非class_id = 0,开启会增加约 100-300ms 的耗时, 但可提高识别率
+    use_det: bool = True
+    """是否启用 RapidOCR 文本检测。
+
+    默认开启以进一步定位 YOLO 裁剪出的候选区域，提高复杂版面、低清晰度图片的识别率。
+    对吞吐量要求极高且图片裁剪稳定的场景，可显式设为 ``False`` 以缩短单次识别耗时。
+    """
     det_limit_side_len: int = 320
     max_input_dim: int = 960  # OCR 输入图片的最大边长（像素）。超过此值会等比例缩小。
     min_input_dim: int = 300  # OCR 输入图片的最小边长（像素）。低于此值会等比例放大。

@@ -127,11 +127,12 @@ class Batch:
         )
 
         # ── 线程数 ──
+        cpu_count = os.cpu_count() or 1
+        inference_threads = max(self._engine.config.detector.num_threads, 1)
         self.max_workers = (
-            self._cfg.max_workers
-            if self._cfg.max_workers is not None
-            else max(2, ((os.cpu_count() or 4) - 1) // max(self._engine.config.detector.num_threads, 1))
+            self._cfg.max_workers if self._cfg.max_workers is not None else max(1, cpu_count // inference_threads)
         )
+        self._scan_errors: list[tuple[Path, str]] = []
 
         # ── 扩展名 ──
         if self._cfg.extensions is not None:
@@ -230,19 +231,23 @@ class Batch:
     # ── 步骤 1：扫描 ──
 
     def _scan_files(self) -> list[Path]:
-        """扫描目录，返回待处理的文件列表。"""
+        """扫描目录，返回待处理的文件列表。
+
+        保持扫描器产出的顺序，避免为了批处理而额外排序整个大目录。
+        扫描过程中的可恢复错误会保存到 ``_scan_errors``，由 ``run`` 汇总到结果中。
+        """
         from dedupx import FileScanner  # type: ignore
 
-        return [
-            sf.filepath
-            for sf in FileScanner(
-                include_extensions=list(self._extensions),
-                exclude_names=self.exclude_dirs,
-                exclude_paths=list(self._out_dirs_resolved) if self._out_dirs_resolved else [],
-                recursive=self._cfg.recursive,
-                dedup_inodes=False,
-            ).collect_info(self.source_dir)
-        ]
+        scanner = FileScanner(
+            include_extensions=list(self._extensions),
+            exclude_names=self.exclude_dirs,
+            exclude_paths=list(self._out_dirs_resolved) if self._out_dirs_resolved else [],
+            recursive=self._cfg.recursive,
+            dedup_inodes=False,
+        )
+        files = [scanned_file.filepath for scanned_file in scanner.scan(self.source_dir)]
+        self._scan_errors = scanner.last_errors
+        return files
 
     # ── 步骤 2+3+4：提取 → 重命名 → 移动（流式处理） ──
 
@@ -259,7 +264,7 @@ class Batch:
             if self.shutdown_event and self.shutdown_event.is_set():
                 return
             outcome, dst = self._dest_and_move(fr.src, fr.outcome, fr)
-            entry = reporter.record_outcome(result, fr.src, outcome, dst, fr.elapsed)
+            entry = reporter.record_outcome(result, fr.src, outcome, dst, fr.elapsed, error=fr.error)
             if entry and self._entries_callback:
                 old, new, elapsed, tag = entry
                 idx = result.success + result.failed + result.skipped
@@ -293,9 +298,16 @@ class Batch:
         # ── Step 1: 扫描 ──
         files = self._scan_files()
         result.total = len(files)
+        for path, error in self._scan_errors:
+            result.errors.append((path, f"扫描失败: {error}"))
+        if self._scan_errors:
+            logger.warning(f"扫描时跳过 {len(self._scan_errors)} 个无法读取的路径")
 
         if files:
-            logger.info(f"扫描目录: {self.source_dir}, 扫描到 {result.total} 个文件  使用 {self.max_workers} 线程")
+            logger.info(
+                f"扫描目录: {self.source_dir}, 扫描到 {result.total} 个文件  "
+                f"使用 {self.max_workers} 个批处理线程（ONNX 每任务 {self._engine.config.detector.num_threads} 线程）"
+            )
 
             # ── Step 2: 提取 → 重命名 → 移动（流式） ──
             self._process_all(result, files)

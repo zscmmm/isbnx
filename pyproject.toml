@@ -1,6 +1,6 @@
 [project]
 name = "isbnx"
-version = "0.0.16"
+version = "0.0.17"
 description = "从 PDF、图片、压缩包和 EPUB 文件中提取 ISBN 号，支持 ONNX 检测和 OCR 识别"
 readme = "README.md"
 authors = [
@@ -20,7 +20,7 @@ dependencies = [
     "rarfile>=4.2",
     "py7zr>=0.22",
     "send2trash>=1.8.0",
-    "dedupx>=0.1.1",
+    "dedupx>=0.1.2",
     "pdf-inspector>=0.2.0",
     "opencv-python-headless>=4.13.0.92",
 ]
@@ -50,9 +50,6 @@ build-backend = "uv_build"
 [tool.uv]
 exclude-dependencies = ["opencv-python",]
 
-[[tool.uv.index]]
-url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
-default = true
 
 
 

@@ -240,15 +240,16 @@ class FileExtractor:
             extract_iter = iter(extract_files)
             submitted = 0
 
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            executor = ThreadPoolExecutor(max_workers=max_workers)
+            cancelled = False
+            try:
                 max_pending = max(max_workers * 3, 16)
                 pending: dict[Future, Path] = {}
 
                 while submitted < total_extract or pending:
                     if shutdown_event and shutdown_event.is_set():
                         logger.info("🛑 收到关闭信号，终止文件处理")
-                        executor.shutdown(wait=False, cancel_futures=True)
-                        pending.clear()
+                        cancelled = True
                         break
 
                     while submitted < total_extract and len(pending) < max_pending:
@@ -264,5 +265,7 @@ class FileExtractor:
                             _done(future.result())
                         except Exception as e:
                             _done(FileResult(src=fp, outcome=Outcome.ERROR, error=str(e)))
+            finally:
+                executor.shutdown(wait=not cancelled, cancel_futures=cancelled)
 
         return results

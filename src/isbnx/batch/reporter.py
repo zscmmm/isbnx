@@ -27,6 +27,8 @@ def record_outcome(
     outcome: Outcome,
     dst: Path | None,
     elapsed: float,
+    *,
+    error: str | None = None,
 ) -> tuple[str, str, float, str] | None:
     """将单个文件的处理结果记录到 ``result``。
 
@@ -38,6 +40,7 @@ def record_outcome(
         outcome: 结果分类。
         dst: 目标路径。
         elapsed: 处理耗时（秒）。
+        error: 原始异常信息，仅 ``outcome=Outcome.ERROR`` 时记录。
 
     Returns:
         ``(old, new, elapsed, tag)`` 元组，供回调使用。
@@ -50,9 +53,9 @@ def record_outcome(
     elif outcome == Outcome.ERROR:
         result.failed += 1
         if dst is not None:
-            result.errors.append((fp, f"已移入失败目录: {dst}"))
+            result.errors.append((fp, f"{error or '未知异常'}；已移入失败目录: {dst}"))
         else:
-            result.errors.append((fp, "异常且无法移入失败目录"))
+            result.errors.append((fp, f"{error or '未知异常'}；异常且无法移入失败目录"))
         return None
     else:  # Outcome.FAILED
         result.failed += 1
